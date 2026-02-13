@@ -298,8 +298,16 @@ export const useStore = create<AppState>()(
             body: validationPayload,
           });
 
-          if (validationResponse.error || (validationResponse.data && !validationResponse.data.valid)) {
-            const errorData = validationResponse.data || {};
+          if (validationResponse.error) {
+            // SDK error (network failure, unexpected status code)
+            const err = validationResponse.error as any;
+            const errorMsg = err.errors?.join('\n') || err.error || err.message || 'فشل التحقق من الطلب';
+            throw new Error(errorMsg);
+          }
+
+          if (validationResponse.data && !validationResponse.data.valid) {
+            // Successful response but validation failed
+            const errorData = validationResponse.data;
             const errorMsg = errorData.errors?.join('\n') || errorData.error || 'فشل التحقق من الطلب';
             throw new Error(errorMsg);
           }
