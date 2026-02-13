@@ -1,13 +1,18 @@
-import React, { useState } from 'react';
-import { Routes, Route } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { Routes, Route, Link } from 'react-router-dom';
 import { CustomerView } from './components/CustomerView';
 import { AdminView } from './components/AdminView';
 import { AdminLogin } from './components/AdminLogin';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { CartSidebar } from './components/CartSidebar';
 import { CheckoutModal } from './components/CheckoutModal';
+import { RegisterPage } from './components/auth/RegisterPage';
+import { LoginPage } from './components/auth/LoginPage';
+import { AccountPage } from './components/auth/AccountPage';
+import { AuthGuard } from './components/auth/AuthGuard';
 import { useStore } from './store/useStore';
-import { ShoppingBag, UtensilsCrossed, Phone, XCircle } from 'lucide-react';
+import { useAuthStore } from './store/useAuthStore';
+import { ShoppingBag, UtensilsCrossed, Phone, XCircle, User, LogIn } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -15,8 +20,13 @@ const CustomerLayout: React.FC = () => {
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const { cart, globalSettings, fetchGlobalSettings } = useStore();
+  const { isAuthenticated, user, initSession } = useAuthStore();
   const isOpen = globalSettings?.is_website_open ?? true;
   const [isScrolled, setIsScrolled] = useState(false);
+
+  useEffect(() => {
+    initSession();
+  }, []);
 
   React.useEffect(() => {
     fetchGlobalSettings();
@@ -85,7 +95,7 @@ const CustomerLayout: React.FC = () => {
           </div>
 
           {/* Actions */}
-          <div className="flex items-center gap-3 md:gap-4">
+          <div className="flex items-center gap-2 md:gap-3">
             <a
               href="tel:01141638005"
               className={`hidden md:flex items-center gap-2 font-bold text-sm px-5 py-2.5 rounded-full transition-all ${isScrolled
@@ -96,6 +106,31 @@ const CustomerLayout: React.FC = () => {
               <Phone className="w-4 h-4" />
               <span>01141638005</span>
             </a>
+
+            {/* Auth Button */}
+            {isAuthenticated ? (
+              <Link
+                to="/account"
+                className={`flex items-center gap-2 font-bold text-sm px-4 py-2.5 rounded-full transition-all ${isScrolled
+                  ? 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  : 'bg-white/20 text-white hover:bg-white/30 backdrop-blur-sm border border-white/20'
+                  }`}
+              >
+                <User className="w-4 h-4" />
+                <span className="hidden md:inline max-w-[80px] truncate">{user?.name?.split(' ')[0] || 'حسابي'}</span>
+              </Link>
+            ) : (
+              <Link
+                to="/login"
+                className={`flex items-center gap-2 font-bold text-sm px-4 py-2.5 rounded-full transition-all ${isScrolled
+                  ? 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  : 'bg-white/20 text-white hover:bg-white/30 backdrop-blur-sm border border-white/20'
+                  }`}
+              >
+                <LogIn className="w-4 h-4" />
+                <span className="hidden md:inline">دخول</span>
+              </Link>
+            )}
 
             <button
               onClick={() => setIsCartOpen(true)}
@@ -232,6 +267,16 @@ const App: React.FC = () => {
   return (
     <Routes>
       <Route path="/" element={<CustomerLayout />} />
+      <Route path="/register" element={<RegisterPage />} />
+      <Route path="/login" element={<LoginPage />} />
+      <Route
+        path="/account"
+        element={
+          <AuthGuard>
+            <AccountPage />
+          </AuthGuard>
+        }
+      />
       <Route path="/admin/login" element={<AdminLogin />} />
       <Route
         path="/admin"

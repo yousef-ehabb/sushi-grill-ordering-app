@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { X, CheckCircle2, Truck, Store, MapPin, Phone, User, Loader2, ArrowLeft } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, CheckCircle2, Truck, Store, MapPin, Phone, User, Loader2, ArrowLeft, UserCheck } from 'lucide-react';
 import { useStore } from '../store/useStore';
+import { useAuthStore } from '../store/useAuthStore';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 
@@ -11,12 +12,32 @@ interface CheckoutModalProps {
 
 export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose }) => {
   const { cart, orderType, setOrderType, clearCart, submitOrder, loading } = useStore();
+  const { user, isAuthenticated } = useAuthStore();
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState({
     name: '',
     phone: '',
     address: '',
   });
+
+  // Auto-fill from user profile when modal opens
+  useEffect(() => {
+    if (isOpen && isAuthenticated && user) {
+      setFormData((prev) => ({
+        name: prev.name || user.name || '',
+        phone: prev.phone || user.phone || '',
+        address: prev.address || user.address || '',
+      }));
+    }
+  }, [isOpen, isAuthenticated, user]);
+
+  // Reset form when modal closes
+  useEffect(() => {
+    if (!isOpen) {
+      setStep(1);
+      setFormData({ name: '', phone: '', address: '' });
+    }
+  }, [isOpen]);
 
   const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
@@ -27,6 +48,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
       customer_name: formData.name,
       customer_phone: formData.phone,
       address: orderType === 'delivery' ? formData.address : undefined,
+      user_id: isAuthenticated && user ? user.id : undefined,
       type: orderType || 'pickup',
       items: [...cart],
       total,
@@ -126,6 +148,14 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
                     </div>
 
                     {/* Customer Details */}
+                    {isAuthenticated && user && (
+                      <div className="flex items-center gap-2 px-3 py-2.5 bg-emerald-50 rounded-xl border border-emerald-100">
+                        <UserCheck className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                        <span className="text-sm font-medium text-emerald-700">
+                          مسجّل كـ <span className="font-bold">{user.name}</span> — تم ملء بياناتك تلقائياً
+                        </span>
+                      </div>
+                    )}
                     <div className="space-y-4">
                       <div className="space-y-1.5">
                         <label className="text-sm font-bold text-slate-700 flex items-center gap-2">

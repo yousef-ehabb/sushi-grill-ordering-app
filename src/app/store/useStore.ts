@@ -37,6 +37,7 @@ export type Order = {
   customer_name: string;
   customer_phone: string;
   address?: string;
+  user_id?: string;
   type: 'pickup' | 'delivery';
   items: CartItem[];
   total: number;
@@ -319,6 +320,7 @@ export const useStore = create<AppState>()(
               customer_name: orderData.customer_name,
               customer_phone: orderData.customer_phone,
               address: orderData.address || null,
+              user_id: orderData.user_id || null,
               type: orderData.type,
               total: orderData.total,
               status: 'new',
