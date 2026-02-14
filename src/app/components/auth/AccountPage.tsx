@@ -3,11 +3,20 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useStore } from '../../store/useStore';
 import { PhoneInput } from '../ui/PhoneInput';
-import { User, Mail, MapPin, Package, LogOut, Save, Loader2, ArrowLeft, CheckCircle2, Clock, Truck, Store, UtensilsCrossed } from 'lucide-react';
+import { User, Mail, MapPin, Package, LogOut, Save, Loader2, ArrowLeft, CheckCircle2, Clock, Truck, Store, UtensilsCrossed, ChevronLeft } from 'lucide-react';
 import { toast } from 'sonner';
 import { motion } from 'motion/react';
 import { insforge } from '../../../lib/insforge';
 import { formatPhoneDisplay } from '../../../lib/phoneUtils';
+
+interface OrderItemLocal {
+    id: string;
+    product_id: string | null;
+    name_ar: string;
+    quantity: number;
+    unit_price: number;
+    special_instructions?: string;
+}
 
 interface Order {
     id: string;
@@ -16,6 +25,7 @@ interface Order {
     total: number;
     status: string;
     created_at: string;
+    items: OrderItemLocal[];
 }
 
 export const AccountPage: React.FC = () => {
@@ -59,7 +69,18 @@ export const AccountPage: React.FC = () => {
                 .eq('user_id', user.id)
                 .order('created_at', { ascending: false });
 
-            if (!error && data) setOrders(data);
+            if (!error && data) {
+                const ordersWithItems: Order[] = await Promise.all(
+                    data.map(async (order: any) => {
+                        const { data: items } = await insforge.database
+                            .from('order_items')
+                            .select('*')
+                            .eq('order_id', order.id);
+                        return { ...order, items: items || [] };
+                    })
+                );
+                setOrders(ordersWithItems);
+            }
         } catch {
             // silent fail
         } finally {
@@ -94,7 +115,8 @@ export const AccountPage: React.FC = () => {
         new: { label: 'جديد', color: 'bg-blue-100 text-blue-700' },
         preparing: { label: 'قيد التحضير', color: 'bg-amber-100 text-amber-700' },
         ready: { label: 'جاهز', color: 'bg-green-100 text-green-700' },
-        delivered: { label: 'تم التوصيل', color: 'bg-slate-100 text-slate-600' },
+        out_for_delivery: { label: 'في التوصيل', color: 'bg-purple-100 text-purple-700' },
+        completed: { label: 'مكتمل', color: 'bg-slate-100 text-slate-600' },
         cancelled: { label: 'ملغي', color: 'bg-red-100 text-red-700' },
     };
 
@@ -305,45 +327,71 @@ export const AccountPage: React.FC = () => {
                                 </Link>
                             </div>
                         ) : (
-                            orders.map((order) => {
-                                const status = statusLabels[order.status] || statusLabels.new;
+                            orders.map((order, index) => {
+                                const status = statusLabels[order.status] || { label: order.status, color: 'bg-slate-100 text-slate-500' };
+                                const itemPreview = order.items?.slice(0, 3).map(i => i.name_ar).join('، ') || '';
+                                const extraCount = (order.items?.length || 0) - 3;
+                                const isArchived = order.status === 'completed' || order.status === 'cancelled';
                                 return (
-                                    <div
+                                    <motion.div
                                         key={order.id}
-                                        className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 hover:shadow-md transition-shadow"
+                                        initial={{ opacity: 0, y: 16 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        transition={{ delay: index * 0.06 }}
+                                        onClick={() => navigate(`/account/orders/${order.id}`)}
+                                        className={`rounded-2xl shadow-sm border p-5 transition-all cursor-pointer active:scale-[0.98] group ${isArchived
+                                            ? 'bg-slate-50 border-slate-100 opacity-60'
+                                            : 'bg-white border-slate-100 hover:shadow-lg hover:border-primary/20'
+                                            }`}
                                     >
+                                        {/* Header: ID + Status */}
                                         <div className="flex items-center justify-between mb-3">
                                             <div className="flex items-center gap-2">
-                                                <span className="font-mono text-sm font-bold text-slate-900">
+                                                <span className={`font-mono text-sm font-bold ${isArchived ? 'text-slate-400' : 'text-slate-900'}`}>
                                                     #{order.id.slice(0, 8).toUpperCase()}
                                                 </span>
                                                 <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${status.color}`}>
                                                     {status.label}
                                                 </span>
                                             </div>
-                                            <div className="flex items-center gap-1.5 text-slate-400 text-xs">
-                                                <Clock className="w-3.5 h-3.5" />
-                                                {new Date(order.created_at).toLocaleDateString('ar-EG', {
-                                                    day: 'numeric',
-                                                    month: 'short',
-                                                    hour: '2-digit',
-                                                    minute: '2-digit',
-                                                })}
-                                            </div>
+                                            <ChevronLeft className="w-5 h-5 text-slate-300 group-hover:text-primary transition-colors" />
                                         </div>
-                                        <div className="flex items-center justify-between">
-                                            <div className="flex items-center gap-2 text-slate-500 text-sm">
-                                                {order.type === 'delivery' ? (
-                                                    <><Truck className="w-4 h-4" /> توصيل</>
-                                                ) : (
-                                                    <><Store className="w-4 h-4" /> استلام</>
+
+                                        {/* Item Preview */}
+                                        {order.items && order.items.length > 0 && (
+                                            <p className="text-sm text-slate-500 mb-3 line-clamp-1">
+                                                {itemPreview}
+                                                {extraCount > 0 && (
+                                                    <span className="text-slate-400"> و {extraCount} أصناف أخرى</span>
                                                 )}
+                                            </p>
+                                        )}
+
+                                        {/* Footer: Type + Date + Total */}
+                                        <div className="flex items-center justify-between pt-2 border-t border-slate-50">
+                                            <div className="flex items-center gap-3">
+                                                <div className="flex items-center gap-1.5 text-slate-400 text-xs">
+                                                    {order.type === 'delivery' ? (
+                                                        <><Truck className="w-3.5 h-3.5" /> توصيل</>
+                                                    ) : (
+                                                        <><Store className="w-3.5 h-3.5" /> استلام</>
+                                                    )}
+                                                </div>
+                                                <div className="flex items-center gap-1 text-slate-400 text-xs">
+                                                    <Clock className="w-3 h-3" />
+                                                    {new Date(order.created_at).toLocaleDateString('ar-EG', {
+                                                        day: 'numeric',
+                                                        month: 'short',
+                                                        hour: '2-digit',
+                                                        minute: '2-digit',
+                                                    })}
+                                                </div>
                                             </div>
                                             <span className="font-black text-slate-900">
                                                 {order.total} <span className="text-sm font-bold text-slate-400">ج.م</span>
                                             </span>
                                         </div>
-                                    </div>
+                                    </motion.div>
                                 );
                             })
                         )}

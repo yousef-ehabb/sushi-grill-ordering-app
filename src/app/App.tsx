@@ -9,17 +9,20 @@ import { CheckoutModal } from './components/CheckoutModal';
 import { RegisterPage } from './components/auth/RegisterPage';
 import { LoginPage } from './components/auth/LoginPage';
 import { AccountPage } from './components/auth/AccountPage';
+import { OrderDetailPage } from './components/auth/OrderDetailPage';
 import { AuthGuard } from './components/auth/AuthGuard';
+import { ActiveOrderModal } from './components/ActiveOrderModal';
 import { useStore } from './store/useStore';
 import { useAuthStore } from './store/useAuthStore';
-import { ShoppingBag, UtensilsCrossed, Phone, XCircle, User, LogIn } from 'lucide-react';
+import { ShoppingBag, UtensilsCrossed, Phone, XCircle, User, LogIn, ClipboardList } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
 
 const CustomerLayout: React.FC = () => {
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
-  const { cart, globalSettings, fetchGlobalSettings } = useStore();
+  const [isActiveOrderOpen, setIsActiveOrderOpen] = useState(false);
+  const { cart, globalSettings, fetchGlobalSettings, activeOrder, fetchActiveOrder } = useStore();
   const { isAuthenticated, user, initSession } = useAuthStore();
   const isOpen = globalSettings?.is_website_open ?? true;
   const [isScrolled, setIsScrolled] = useState(false);
@@ -37,6 +40,14 @@ const CustomerLayout: React.FC = () => {
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  // Poll active order for header badge
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    fetchActiveOrder();
+    const interval = setInterval(fetchActiveOrder, 30_000);
+    return () => clearInterval(interval);
+  }, [isAuthenticated]);
 
   const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
 
@@ -98,13 +109,13 @@ const CustomerLayout: React.FC = () => {
           <div className="flex items-center gap-2 md:gap-3">
             <a
               href="tel:01141638005"
-              className={`hidden md:flex items-center gap-2 font-bold text-sm px-5 py-2.5 rounded-full transition-all ${isScrolled
+              className={`flex items-center justify-center w-10 h-10 rounded-full transition-all ${isScrolled
                 ? 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                 : 'bg-white/20 text-white hover:bg-white/30 backdrop-blur-sm border border-white/20'
                 }`}
+              aria-label="اتصل بنا"
             >
               <Phone className="w-4 h-4" />
-              <span>01141638005</span>
             </a>
 
             {/* Auth Button */}
@@ -130,6 +141,34 @@ const CustomerLayout: React.FC = () => {
                 <LogIn className="w-4 h-4" />
                 <span className="hidden md:inline">دخول</span>
               </Link>
+            )}
+
+            {/* My Orders Icon */}
+            {isAuthenticated && (
+              <button
+                onClick={() => setIsActiveOrderOpen(true)}
+                className={`relative flex items-center justify-center w-10 h-10 rounded-full transition-all ${isScrolled
+                  ? 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  : 'bg-white/20 text-white hover:bg-white/30 backdrop-blur-sm border border-white/20'
+                  }`}
+                aria-label="طلباتي"
+              >
+                <ClipboardList className="w-4.5 h-4.5" />
+                <AnimatePresence>
+                  {activeOrder && (
+                    <motion.span
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1 }}
+                      exit={{ scale: 0 }}
+                      className={`absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white ${activeOrder.status === 'new' ? 'bg-blue-500'
+                        : activeOrder.status === 'preparing' ? 'bg-amber-500'
+                          : activeOrder.status === 'ready' ? 'bg-emerald-500'
+                            : 'bg-purple-500'
+                        }`}
+                    />
+                  )}
+                </AnimatePresence>
+              </button>
             )}
 
             <button
@@ -259,6 +298,12 @@ const CustomerLayout: React.FC = () => {
         isOpen={isCheckoutOpen}
         onClose={() => setIsCheckoutOpen(false)}
       />
+      <ActiveOrderModal
+        orderId={activeOrder?.id ?? null}
+        isOpen={isActiveOrderOpen}
+        onClose={() => setIsActiveOrderOpen(false)}
+        onBrowseMenu={() => document.getElementById('menu')?.scrollIntoView({ behavior: 'smooth' })}
+      />
     </div>
   );
 };
@@ -274,6 +319,14 @@ const App: React.FC = () => {
         element={
           <AuthGuard>
             <AccountPage />
+          </AuthGuard>
+        }
+      />
+      <Route
+        path="/account/orders/:orderId"
+        element={
+          <AuthGuard>
+            <OrderDetailPage />
           </AuthGuard>
         }
       />

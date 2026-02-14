@@ -30,7 +30,7 @@ export type CartItem = Product & {
   cartKey: string;
 };
 
-export type OrderStatus = 'new' | 'preparing' | 'ready' | 'completed';
+export type OrderStatus = 'new' | 'preparing' | 'ready' | 'out_for_delivery' | 'completed' | 'cancelled';
 
 export type Order = {
   id: string;
@@ -43,6 +43,15 @@ export type Order = {
   total: number;
   status: OrderStatus;
   created_at: string;
+};
+
+export type OrderItem = {
+  id: string;
+  product_id: string | null;
+  name_ar: string;
+  quantity: number;
+  unit_price: number;
+  special_instructions?: string;
 };
 
 export type GlobalSettings = {
@@ -71,10 +80,14 @@ interface AppState {
   globalSettings: GlobalSettings | null;
   businessRules: BusinessRule[];
 
+  // Active Order (header badge)
+  activeOrder: { id: string; status: OrderStatus } | null;
+
   // Data Fetching
   fetchCategories: () => Promise<void>;
   fetchProducts: () => Promise<void>;
   fetchOrders: () => Promise<void>;
+  fetchActiveOrder: () => Promise<void>;
   fetchGlobalSettings: () => Promise<void>;
   fetchBusinessRules: () => Promise<void>;
 
@@ -88,6 +101,7 @@ interface AppState {
 
   // Order Actions
   submitOrder: (order: Omit<Order, 'id' | 'created_at' | 'status' | 'items'> & { items: CartItem[] }) => Promise<string | null>;
+  reorderFromHistory: (items: OrderItem[]) => { added: number; skipped: string[] };
 
   // Admin Actions
   toggleAvailability: (productId: string) => Promise<void>;
@@ -113,6 +127,7 @@ export const useStore = create<AppState>()(
       error: null,
       globalSettings: null,
       businessRules: [],
+      activeOrder: null,
 
       // ── Data Fetching ──────────────────────────────────────
 
@@ -177,6 +192,21 @@ export const useStore = create<AppState>()(
         );
 
         set({ orders: ordersWithItems });
+      },
+
+      fetchActiveOrder: async () => {
+        const { data, error } = await insforge.database
+          .from('orders')
+          .select('id, status')
+          .not('status', 'in', '(completed,cancelled)')
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        if (error || !data || data.length === 0) {
+          set({ activeOrder: null });
+          return;
+        }
+        set({ activeOrder: { id: data[0].id, status: data[0].status } });
       },
 
       fetchGlobalSettings: async () => {
@@ -358,6 +388,47 @@ export const useStore = create<AppState>()(
           console.error('Order submission failed:', err);
           return null;
         }
+      },
+
+      // ── Reorder ─────────────────────────────────────────────
+
+      reorderFromHistory: (items) => {
+        const { products } = get();
+        const added: CartItem[] = [];
+        const skipped: string[] = [];
+
+        for (const item of items) {
+          const product = item.product_id
+            ? products.find((p) => p.id === item.product_id)
+            : null;
+
+          if (product && product.is_available) {
+            added.push({
+              ...product,
+              quantity: item.quantity,
+              specialInstructions: item.special_instructions || undefined,
+              cartKey: item.special_instructions
+                ? `${product.id}-${Date.now()}-${added.length}`
+                : product.id,
+            });
+          } else {
+            skipped.push(item.name_ar);
+          }
+        }
+
+        // Merge items with same cartKey (no special instructions)
+        const merged = new Map<string, CartItem>();
+        for (const cartItem of added) {
+          const existing = merged.get(cartItem.cartKey);
+          if (existing) {
+            existing.quantity += cartItem.quantity;
+          } else {
+            merged.set(cartItem.cartKey, { ...cartItem });
+          }
+        }
+
+        set({ cart: Array.from(merged.values()), orderType: null });
+        return { added: merged.size, skipped };
       },
 
       // ── Admin Actions ──────────────────────────────────────

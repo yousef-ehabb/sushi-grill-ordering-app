@@ -21,14 +21,18 @@ interface SignUpResult {
 interface AuthState {
     user: UserProfile | null;
     isAuthenticated: boolean;
+    isAdmin: boolean;
     isLoading: boolean;
     error: string | null;
     pendingProfile: { phone: string; address: string } | null;
 
     initSession: () => Promise<void>;
+    login: (username: string, password: string) => Promise<boolean>;
+    checkSession: () => Promise<void>;
     signUp: (data: SignUpData) => Promise<SignUpResult>;
     signIn: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
     signOut: () => Promise<void>;
+    logout: () => Promise<void>;
     verifyEmail: (email: string, otp: string) => Promise<{ success: boolean; error?: string }>;
     resendVerification: (email: string) => Promise<{ success: boolean; error?: string }>;
     updateProfile: (data: Partial<Pick<UserProfile, 'name' | 'phone' | 'address'>>) => Promise<{ success: boolean; error?: string }>;
@@ -57,28 +61,123 @@ function mapUser(authUser: any): UserProfile {
 export const useAuthStore = create<AuthState>((set, get) => ({
     user: null,
     isAuthenticated: false,
+    isAdmin: false,
     isLoading: true,
     error: null,
     pendingProfile: null,
 
     clearError: () => set({ error: null }),
 
+    // ── Admin Auth ──────────────────────────────────────────
+
+    login: async (username: string, password: string) => {
+        set({ isLoading: true, error: null });
+
+        try {
+            // Look up admin username to get their email
+            const { data: adminRows, error: lookupError } = await insforge.database
+                .from('admin_users')
+                .select()
+                .eq('username', username.trim());
+
+            if (lookupError || !adminRows || adminRows.length === 0) {
+                set({ isLoading: false, error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
+                return false;
+            }
+
+            const adminEmail = adminRows[0].email;
+
+            // Sign in with the admin's email + provided password
+            const { data, error: signInError } = await insforge.auth.signInWithPassword({
+                email: adminEmail,
+                password,
+            });
+
+            if (signInError || !data?.user) {
+                set({ isLoading: false, error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
+                return false;
+            }
+
+            set({
+                user: mapUser(data.user),
+                isAuthenticated: true,
+                isAdmin: true,
+                isLoading: false,
+            });
+            return true;
+        } catch {
+            set({ isLoading: false, error: 'حدث خطأ أثناء تسجيل الدخول' });
+            return false;
+        }
+    },
+
+    checkSession: async () => {
+        set({ isLoading: true });
+        try {
+            const { data } = await insforge.auth.getCurrentSession();
+            const authUser = data?.session?.user;
+
+            if (!authUser) {
+                set({ isAdmin: false, isLoading: false });
+                return;
+            }
+
+            // Check if user exists in admin_users table
+            const { data: adminRows } = await insforge.database
+                .from('admin_users')
+                .select()
+                .eq('user_id', authUser.id);
+
+            set({
+                user: mapUser(authUser),
+                isAuthenticated: true,
+                isAdmin: !!(adminRows && adminRows.length > 0),
+                isLoading: false,
+            });
+        } catch {
+            // Network error — don't destroy a valid session
+            set({ isLoading: false });
+        }
+    },
+
     initSession: async () => {
         try {
             set({ isLoading: true });
-            const { data, error } = await insforge.auth.getCurrentSession();
+            const { data } = await insforge.auth.getCurrentSession();
+            const authUser = data?.session?.user;
 
-            if (data?.session?.user) {
-                set({
-                    user: mapUser(data.session.user),
-                    isAuthenticated: true,
-                    isLoading: false,
-                });
+            if (authUser) {
+                // Check if this session belongs to an admin
+                const { data: adminRows } = await insforge.database
+                    .from('admin_users')
+                    .select()
+                    .eq('user_id', authUser.id);
+
+                const isAdminUser = !!(adminRows && adminRows.length > 0);
+
+                if (isAdminUser) {
+                    // Admin session — restore fully so session persists
+                    set({
+                        user: mapUser(authUser),
+                        isAuthenticated: true,
+                        isAdmin: true,
+                        isLoading: false,
+                    });
+                } else {
+                    // Customer session — expose normally
+                    set({
+                        user: mapUser(authUser),
+                        isAuthenticated: true,
+                        isAdmin: false,
+                        isLoading: false,
+                    });
+                }
             } else {
-                set({ user: null, isAuthenticated: false, isLoading: false });
+                set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false });
             }
         } catch {
-            set({ user: null, isAuthenticated: false, isLoading: false });
+            // Network error — don't destroy a valid session
+            set({ isLoading: false });
         }
     },
 
@@ -262,7 +361,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         try {
             await insforge.auth.signOut();
         } finally {
-            set({ user: null, isAuthenticated: false, isLoading: false, error: null, pendingProfile: null });
+            set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false, error: null, pendingProfile: null });
+        }
+    },
+
+    // Alias for signOut — used by AdminView
+    logout: async () => {
+        try {
+            await insforge.auth.signOut();
+        } finally {
+            set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false, error: null, pendingProfile: null });
         }
     },
 

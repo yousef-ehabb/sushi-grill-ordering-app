@@ -9,7 +9,7 @@ async function main() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             email: 'admin@sushigrill.app',
-            password: 'SushiAdmin2026!',
+            password: 'admin123',
             name: 'Admin'
         })
     });
@@ -27,7 +27,7 @@ async function main() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 email: 'admin@sushigrill.app',
-                password: 'SushiAdmin2026!'
+                password: 'admin123'
             })
         });
         const loginData = await loginRes.json();

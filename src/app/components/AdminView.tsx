@@ -36,7 +36,7 @@ export const AdminView: React.FC = () => {
     fetchGlobalSettings, fetchBusinessRules,
     updateProduct, updateGlobalSettings, toggleCategoryActive, updateBusinessRule
   } = useStore();
-  const { logout } = useAuthStore();
+  const { signOut } = useAuthStore();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'orders' | 'menu' | 'controls'>('orders');
   const [isLoading, setIsLoading] = useState(true);
@@ -179,7 +179,7 @@ export const AdminView: React.FC = () => {
             </button>
           </div>
           <button
-            onClick={async () => { await logout(); navigate('/admin/login', { replace: true }); }}
+            onClick={async () => { await signOut(); navigate('/admin/login', { replace: true }); }}
             className="flex items-center gap-2 text-red-500 hover:bg-red-50 px-4 py-2 rounded-lg transition-all font-bold text-sm shrink-0"
           >
             <LogOut className="w-4 h-4" />
