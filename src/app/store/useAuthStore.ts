@@ -57,6 +57,14 @@ function mapUser(authUser: any): UserProfile {
         avatar_url: authUser.profile?.avatar_url || null,
     };
 }
+function buildSessionState(authUser: any, isAdmin: boolean) {
+    return {
+        user: mapUser(authUser),
+        isAuthenticated: !isAdmin,
+        isAdmin,
+        isLoading: false,
+    };
+}
 
 export const useAuthStore = create<AuthState>((set, get) => ({
     user: null,
@@ -98,12 +106,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
                 return false;
             }
 
-            set({
-                user: mapUser(data.user),
-                isAuthenticated: true,
-                isAdmin: true,
-                isLoading: false,
-            });
+            set(buildSessionState(data.user, true));
             return true;
         } catch {
             set({ isLoading: false, error: 'حدث خطأ أثناء تسجيل الدخول' });
@@ -118,7 +121,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             const authUser = data?.session?.user;
 
             if (!authUser) {
-                set({ isAdmin: false, isLoading: false });
+                set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false });
                 return;
             }
 
@@ -128,12 +131,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
                 .select()
                 .eq('user_id', authUser.id);
 
-            set({
-                user: mapUser(authUser),
-                isAuthenticated: true,
-                isAdmin: !!(adminRows && adminRows.length > 0),
-                isLoading: false,
-            });
+            const isAdminUser = !!(adminRows && adminRows.length > 0);
+            set(buildSessionState(authUser, isAdminUser));
         } catch {
             // Network error — don't destroy a valid session
             set({ isLoading: false });
@@ -154,24 +153,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
                     .eq('user_id', authUser.id);
 
                 const isAdminUser = !!(adminRows && adminRows.length > 0);
-
-                if (isAdminUser) {
-                    // Admin session — restore fully so session persists
-                    set({
-                        user: mapUser(authUser),
-                        isAuthenticated: true,
-                        isAdmin: true,
-                        isLoading: false,
-                    });
-                } else {
-                    // Customer session — expose normally
-                    set({
-                        user: mapUser(authUser),
-                        isAuthenticated: true,
-                        isAdmin: false,
-                        isLoading: false,
-                    });
-                }
+                set(buildSessionState(authUser, isAdminUser));
             } else {
                 set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false });
             }
@@ -340,11 +322,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             }
 
             if (data?.user) {
-                set({
-                    user: mapUser(data.user),
-                    isAuthenticated: true,
-                    isLoading: false,
-                });
+                const { data: adminRows } = await insforge.database
+                    .from('admin_users')
+                    .select()
+                    .eq('user_id', data.user.id);
+                const isAdminUser = !!(adminRows && adminRows.length > 0);
+
+                set(buildSessionState(data.user, isAdminUser));
+
+                if (isAdminUser) {
+                    return { success: false, error: 'هذا حساب إدمن. استخدم صفحة دخول الأدمن.' };
+                }
+
                 return { success: true };
             }
 

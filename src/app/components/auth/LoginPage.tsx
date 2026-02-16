@@ -8,11 +8,12 @@ import { motion } from 'motion/react';
 
 export const LoginPage: React.FC = () => {
     const navigate = useNavigate();
-    const { signIn, isAuthenticated, isLoading, error, clearError } = useAuthStore();
+    const { signIn, isAuthenticated, error, clearError } = useAuthStore();
 
     const [form, setForm] = useState({ email: '', password: '' });
     const [showPassword, setShowPassword] = useState(false);
     const [errors, setErrors] = useState<Record<string, string>>({});
+    const [submitting, setSubmitting] = useState(false);
 
     useEffect(() => {
         if (isAuthenticated) navigate('/');
@@ -35,13 +36,18 @@ export const LoginPage: React.FC = () => {
         e.preventDefault();
         if (!validate()) return;
 
-        const result = await signIn(form.email, form.password);
+        setSubmitting(true);
+        try {
+            const result = await signIn(form.email, form.password);
 
-        if (result.success) {
-            toast.success('تم تسجيل الدخول بنجاح! 🎉');
-            navigate('/');
-        } else {
-            toast.error(result.error || 'فشل تسجيل الدخول');
+            if (result.success) {
+                toast.success('تم تسجيل الدخول بنجاح! 🎉');
+                navigate('/');
+            } else {
+                toast.error(result.error || 'فشل تسجيل الدخول');
+            }
+        } finally {
+            setSubmitting(false);
         }
     };
 
@@ -124,10 +130,10 @@ export const LoginPage: React.FC = () => {
                         {/* Submit */}
                         <button
                             type="submit"
-                            disabled={isLoading}
+                            disabled={submitting}
                             className="w-full bg-primary text-white py-4 rounded-xl font-bold text-lg hover:bg-red-700 transition-all active:scale-[0.98] disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed shadow-xl shadow-red-500/20 disabled:shadow-none flex items-center justify-center gap-2"
                         >
-                            {isLoading ? (
+                            {submitting ? (
                                 <>
                                     <Loader2 className="w-5 h-5 animate-spin" />
                                     جاري تسجيل الدخول...
