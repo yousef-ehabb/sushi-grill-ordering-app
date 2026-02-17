@@ -86,6 +86,11 @@ src/
    npm run dev
    ```
 
+## 🤝 Contributing
+
+- Contribution guide: `CONTRIBUTING.md`
+- AI prompt library for contributors: `PROMPTS.md`
+
 ## 🔒 Security & Performance
 - **RLS (Row Level Security)** enabled on all database tables.
 - **Optimistic UI** updates for instant feedback.
