@@ -6,6 +6,7 @@ import { ArrowRight, Clock, Truck, Store, MapPin, Phone, User, RefreshCw, Loader
 import { toast } from 'sonner';
 import { motion } from 'motion/react';
 import { insforge } from '../../../lib/insforge';
+import { resolveAllOptionNames } from '../../utils/optionNames';
 
 interface OrderDetail {
     id: string;
@@ -61,6 +62,7 @@ export const OrderDetailPage: React.FC = () => {
     const { user } = useAuthStore();
     const { reorderFromHistory, products, fetchProducts } = useStore();
     const [order, setOrder] = useState<OrderDetail | null>(null);
+    const [optionNames, setOptionNames] = useState<Map<string, string>>(new Map());
     const [loading, setLoading] = useState(true);
     const [reordering, setReordering] = useState(false);
 
@@ -92,6 +94,11 @@ export const OrderDetailPage: React.FC = () => {
                 .from('order_items')
                 .select('*')
                 .eq('order_id', orderId);
+
+            if (items && items.length > 0) {
+                const namesMap = await resolveAllOptionNames(items.map(i => i.selected_option_ids || []));
+                setOptionNames(namesMap);
+            }
 
             setOrder({ ...orderData[0], items: items || [] });
         } catch {
@@ -230,13 +237,20 @@ export const OrderDetailPage: React.FC = () => {
                                             {item.name_ar}
                                         </span>
                                     </div>
-                                    {item.special_instructions && (
-                                        <p className="text-xs text-slate-400 mt-1 mr-8 line-clamp-2">
-                                            📝 {item.special_instructions}
-                                        </p>
-                                    )}
+                                    <div className="mr-8 space-y-0.5 mt-0.5">
+                                        {item.selected_option_ids && item.selected_option_ids.length > 0 && (
+                                            <p className="text-[10px] text-slate-400 font-bold">
+                                                🍟 {item.selected_option_ids.map((id: string) => optionNames.get(id)).filter(Boolean).join('، ')}
+                                            </p>
+                                        )}
+                                        {item.special_instructions && (
+                                            <p className="text-[10px] text-slate-300 font-medium">
+                                                — {item.special_instructions}
+                                            </p>
+                                        )}
+                                    </div>
                                 </div>
-                                <span className="text-sm font-bold text-slate-600 shrink-0">
+                                <span className="text-sm font-bold text-slate-600 shrink-0 mt-1">
                                     {(item.unit_price * item.quantity).toFixed(0)} ج.م
                                 </span>
                             </div>

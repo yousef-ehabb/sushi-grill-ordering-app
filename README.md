@@ -1,109 +1,96 @@
-# Sushi & Grill Ordering App
+# Sushi & Grill — Modern Online Ordering System
 
-A production-ready online ordering system for a sushi and grill restaurant, built with React, TypeScript, Vite, Tailwind, Zustand, and InsForge.
-
-The app is designed as an Arabic-first, RTL-friendly experience with separate customer and admin workflows.
+> A production-grade, full-stack ordering platform built with **React**, **TypeScript**, **Tailwind CSS**, and **Supabase (InsForge)**. Designed for speed, reliability, and a premium "Arabic-first" user experience.
 
 ![Project Banner](public/hero-3.png)
 
-## Overview
+## 🚀 Key Features
 
-This project includes:
-- Customer menu browsing, cart management, checkout, account, and order tracking
-- Admin login and dashboard for operational controls and order handling
-- InsForge-backed auth, database, storage, and edge-function validation
+### For Customers
+- **⚡ Quick Add Flow**: Add items to cart instantly without modal interruptions.
+- **🔍 Smart Product Details**: Deep dive into ingredients and special instructions with a mobile-first bottom sheet.
+- **🛒 Intelligent Cart**: Automatically merges identical items but keeps custom orders separate.
+- **📱 Responsive Design**: Fully optimized for mobile, tablet, and desktop with smooth animations.
+- **🛑 Real-time Operations**: Status badge updates instantly when the store opens/closes.
 
-## Features
+### For Admins
+- **🎛️ Operational Control**: Toggle store status, manage category availability, and set minimum order quantities.
+- **📊 Live Order Dashboard**: Real-time view of incoming orders with status tracking.
+- **🛡️ Server-Side Validation**: Robust edge functions ensure no invalid orders slip through.
 
-### Customer Side
-- Fast add-to-cart flow with product detail modal
-- Cart supports quantity updates and per-item special instructions
-- Checkout with business-rule validation before order creation
-- Account area with profile management and order history
-- Order detail timeline with status progression
+## 🛠️ Tech Stack
 
-### Admin Side
-- Admin authentication flow
-- Order status management (`new`, `preparing`, `ready`, `out_for_delivery`, `completed`, `cancelled`)
-- Product availability control
-- Category activation control
-- Global website open/close control with custom message
-- Category minimum quantity business rules
+- **Frontend**: React 18, TypeScript, Vite
+- **Styling**: Tailwind CSS, Framer Motion (animations), Lucide (icons)
+- **State Management**: Zustand (persisted local storage)
+- **Backend & DB**: InsForge (Supabase)
+- **Edge Functions**: Deno (server-side validation)
+- **UI Components**: Radix UI primitives, Sonner (toast notifications)
 
-## Tech Stack
+## 🏗️ Architecture Highlights
 
-- Frontend: React 18, TypeScript, Vite
-- Styling/UI: Tailwind CSS, Radix UI, Motion, Lucide
-- State: Zustand
-- Backend: InsForge SDK (auth, database, storage, functions)
-- Notifications: Sonner
+### 1. Robust State Management
+Uses **Zustand** for a lightweight, performant store. The `useStore` hook manages:
+- **Cart Logic**: Complex deduplication based on `cartKey` (Product ID + attributes).
+- **Business Rules**: Fetches and enforces rules like "Minimum Order Quantity" globally.
+- **Persistence**: Cart and user sessions survive page reloads.
 
-## Project Structure
+### 2. Edge-First Validation
+Critical business logic is enforced on the server (Edge Functions) to prevent client-side manipulation:
+- Checks store open/close status in real-time.
+- Validates product availability and price integrity.
+- Enforces category-specific limitations.
 
-```text
+### 3. Arabic-First Design System
+Built from the ground up for RTL (Right-to-Left) support:
+- Custom font: **IBM Plex Sans Arabic**.
+- RTL-aware spacing and layout utilities.
+- Cultural localization (currency formatting, translations).
+
+## 📂 Project Structure
+
+```bash
 src/
-  app/
-    components/      UI components and pages
-    functions/       Runtime function code
-    store/           Zustand stores
-    App.tsx          Main app shell and routing logic
-  lib/
-    insforge.ts      InsForge client setup
-    phoneUtils.ts    Phone parsing/validation helpers
-scripts/
-  validate-order.js  Deno edge function for server-side order validation
-docs/
-  *.md              Feature plans and walkthroughs
+├── app/
+│   ├── components/       # UI Components (ProductCard, CartSidebar, AdminView...)
+│   ├── store/           # Zustand state management
+│   ├── functions/       # Edge functions (validate-order)
+│   ├── App.tsx          # Main application status & routing
+│   └── main.tsx         # Entry point
+├── lib/                 # Utilities (InsForge client, helpers)
+├── styles/              # Global CSS & Tailwind config
+└── public/              # Static assets
 ```
 
-## Getting Started
+## 🚀 Getting Started
 
 ### Prerequisites
-
 - Node.js 18+
-- npm
-- Git
+- npm or pnpm
 
-### Install
+### Installation
 
-```bash
-git clone https://github.com/yousef-ehabb/sushi-grill-ordering-app.git
-cd sushi-grill-ordering-app
-npm install
-```
+1. **Clone the repo**
+   ```bash
+   git clone https://github.com/yousef-ehabb/sushi-grill-ordering-app.git
+   cd sushi-grill-ordering-app
+   ```
 
-### Run in Development
+2. **Install dependencies**
+   ```bash
+   npm install
+   ```
 
-```bash
-npm run dev
-```
+3. **Start development server**
+   ```bash
+   npm run dev
+   ```
 
-### Build for Production
+## 🔒 Security & Performance
+- **RLS (Row Level Security)** enabled on all database tables.
+- **Optimistic UI** updates for instant feedback.
+- **Lazy Loading** for images and heavy components.
 
-```bash
-npm run build
-```
+---
 
-## InsForge Notes
-
-- The application uses InsForge for backend services.
-- Contributors should use the InsForge dashboard for schema/data operations.
-- Do not expose privileged InsForge project keys in code, docs, or pull requests.
-- If a key is exposed, rotate it immediately in project settings.
-
-## Contributor Resources
-
-- Contribution workflow and onboarding: `CONTRIBUTING.md`
-- AI IDE prompt library for consistent contributions: `PROMPTS.md`
-- Short redirect doc: `CONTRIBUTION.md`
-
-## Quality and Security
-
-- Server-side validation is enforced through `validate-order` logic.
-- UI uses optimistic updates where appropriate.
-- Business constraints are validated both client-side and server-side.
-- Treat all credentials as sensitive.
-
-## Author
-
-- [Yousef Ehab](https://github.com/yousef-ehabb)
+**Author**: [Yousef Ehab](https://github.com/yousef-ehabb)

@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Plus, Minus, ShoppingBag } from 'lucide-react';
 import { Product, useStore } from '../store/useStore';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
+import { clsx } from 'clsx';
 
 interface ProductDetailsModalProps {
     product: Product;
@@ -13,31 +14,57 @@ interface ProductDetailsModalProps {
 const MAX_NOTE_LENGTH = 200;
 
 export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ product, isOpen, onClose }) => {
-    const { addToCartWithDetails, categories, globalSettings } = useStore();
+    const { addToCartWithDetails, categories, globalSettings, fetchProductOptionGroups, optionGroupsByProductId } = useStore();
     const [quantity, setQuantity] = useState(1);
     const [note, setNote] = useState('');
+    const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
 
     const category = categories.find(c => c.id === product.category_id);
     const isCategoryInactive = category && !category.is_active;
     const isWebsiteClosed = globalSettings && !globalSettings.is_website_open;
     const isDisabled = !product.is_available || !!isCategoryInactive || !!isWebsiteClosed;
 
+    const groups = optionGroupsByProductId[product.id] || [];
+
+    useEffect(() => {
+        if (isOpen) {
+            fetchProductOptionGroups(product.id);
+        }
+    }, [isOpen, product.id, fetchProductOptionGroups]);
+
+    // Calculate total price including options
+    const optionsPrice = selectedOptions.reduce((total, optionId) => {
+        const option = groups.flatMap(g => g.options || []).find(o => o.id === optionId);
+        return total + (option?.price_delta || 0);
+    }, 0);
+
+    const totalPrice = (product.price + optionsPrice) * quantity;
+
     const handleAdd = () => {
         if (isDisabled) return;
-        addToCartWithDetails(product, quantity, note || undefined);
+
+        // Final validation: check min_select for groups
+        for (const group of groups) {
+            const groupSelections = selectedOptions.filter(id => group.options?.some(o => o.id === id));
+            if (groupSelections.length < group.min_select) {
+                toast.error(`يرجى اختيار ${group.min_select} صنف على الأقل من ${group.name_ar}`);
+                return;
+            }
+        }
+
+        addToCartWithDetails(product, quantity, note || undefined, selectedOptions);
         toast.success('تمت الإضافة للسلة', {
             description: `${product.name_ar} × ${quantity}`,
             position: 'bottom-left',
         });
-        // Reset and close
-        setQuantity(1);
-        setNote('');
-        onClose();
+
+        handleClose();
     };
 
     const handleClose = () => {
         setQuantity(1);
         setNote('');
+        setSelectedOptions([]);
         onClose();
     };
 
@@ -87,11 +114,16 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ produc
                         </div>
 
                         {/* Content */}
-                        <div className="flex-grow overflow-y-auto p-6 space-y-5">
+                        <div className="flex-grow overflow-y-auto p-6 space-y-6">
                             {/* Title & Price */}
                             <div className="flex justify-between items-start gap-4">
                                 <div className="space-y-1">
-                                    <h2 className="text-2xl font-black text-slate-900">{product.name_ar}</h2>
+                                    <div className="flex items-center gap-2">
+                                        <h2 className="text-2xl font-black text-slate-900">{product.name_ar}</h2>
+                                        {product.is_best_seller && (
+                                            <span className="bg-amber-100 text-amber-600 text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-tighter">Best Seller</span>
+                                        )}
+                                    </div>
                                     {product.name_en && (
                                         <p className="text-sm text-slate-400 font-medium">{product.name_en}</p>
                                     )}
@@ -120,6 +152,79 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ produc
                                             </span>
                                         ))}
                                     </div>
+                                </div>
+                            )}
+
+                            {/* Product Option Groups (e.g., Sauces) */}
+                            {groups.length > 0 && (
+                                <div className="space-y-6 py-2 border-y border-slate-50">
+                                    {groups.map((group) => (
+                                        <div key={group.id} className="space-y-3">
+                                            <div className="flex justify-between items-center">
+                                                <div className="flex items-center gap-2">
+                                                    <h4 className="text-sm font-bold text-slate-700">{group.name_ar}</h4>
+                                                    {group.min_select > 0 && (
+                                                        <span className="text-[10px] bg-red-50 text-primary px-2 py-0.5 rounded-full font-bold">إلزامي</span>
+                                                    )}
+                                                </div>
+                                                <span className="text-[10px] bg-slate-100 text-slate-400 px-2 py-0.5 rounded-full font-bold">
+                                                    (حد أقصى {group.max_select})
+                                                </span>
+                                            </div>
+                                            <div className="flex flex-wrap gap-2">
+                                                {group.options
+                                                    ?.slice()
+                                                    .sort((a, b) => (Number(b.is_active) - Number(a.is_active)))
+                                                    .map((option) => {
+                                                        const isSelected = selectedOptions.includes(option.id);
+                                                        const isInactive = !option.is_active;
+
+                                                        const handleOptionClick = () => {
+                                                            if (isInactive) return;
+
+                                                            if (isSelected) {
+                                                                setSelectedOptions(prev => prev.filter(id => id !== option.id));
+                                                            } else {
+                                                                const groupSelections = selectedOptions.filter(id =>
+                                                                    group.options?.some(o => o.id === id)
+                                                                );
+                                                                if (groupSelections.length >= group.max_select) {
+                                                                    toast.warning(`يمكنك اختيار ${group.max_select} بحد أقصى`);
+                                                                    return;
+                                                                }
+                                                                setSelectedOptions(prev => [...prev, option.id]);
+                                                            }
+                                                        };
+
+                                                        return (
+                                                            <button
+                                                                key={option.id}
+                                                                type="button"
+                                                                disabled={isInactive}
+                                                                onClick={handleOptionClick}
+                                                                className={clsx(
+                                                                    "px-4 py-2 rounded-xl text-sm font-medium transition-all border text-right flex items-center gap-2",
+                                                                    isSelected
+                                                                        ? "bg-primary text-white border-primary shadow-md shadow-red-500/10"
+                                                                        : "bg-slate-50 text-slate-600 border-slate-100 hover:border-slate-200 active:scale-95",
+                                                                    isInactive && "opacity-40 cursor-not-allowed border-transparent grayscale pointer-events-none"
+                                                                )}
+                                                            >
+                                                                <span>{option.name_ar}</span>
+                                                                {option.price_delta > 0 && (
+                                                                    <span className={clsx(
+                                                                        "text-[10px] font-bold px-1.5 py-0.5 rounded-md",
+                                                                        isSelected ? "bg-white/20 text-white" : "bg-slate-200 text-slate-500"
+                                                                    )}>
+                                                                        +{option.price_delta}
+                                                                    </span>
+                                                                )}
+                                                            </button>
+                                                        );
+                                                    })}
+                                            </div>
+                                        </div>
+                                    ))}
                                 </div>
                             )}
 
@@ -174,7 +279,7 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ produc
                                     <ShoppingBag className="w-5 h-5" />
                                     <span>أضف للسلة</span>
                                     <span className="bg-white/20 px-2.5 py-0.5 rounded-lg text-sm font-bold mr-1">
-                                        {product.price * quantity} ج.م
+                                        {totalPrice} ج.م
                                     </span>
                                 </button>
                             </div>

@@ -23,22 +23,29 @@ import {
   Save,
   ToggleLeft,
   ToggleRight,
-  Hash
+  Hash,
+  Plus,
+  Trash2,
+  X
 } from 'lucide-react';
+import { resolveAllOptionNames } from '../utils/optionNames';
 import { clsx } from 'clsx';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Toaster, toast } from 'sonner';
 
 export const AdminView: React.FC = () => {
   const {
     orders, products, categories, globalSettings, businessRules,
+    allOptionGroups,
     updateOrderStatus, fetchOrders, fetchProducts, fetchCategories,
-    fetchGlobalSettings, fetchBusinessRules,
-    updateProduct, updateGlobalSettings, toggleCategoryActive, updateBusinessRule
+    fetchGlobalSettings, fetchBusinessRules, fetchAllOptionGroups,
+    updateProduct, updateGlobalSettings, toggleCategoryActive, updateBusinessRule,
+    toggleOptionActive, createOption, updateOption, deleteOption
   } = useStore();
   const { signOut } = useAuthStore();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'orders' | 'menu' | 'controls'>('orders');
+  const [optionNames, setOptionNames] = useState<Map<string, string>>(new Map());
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -47,6 +54,15 @@ export const AdminView: React.FC = () => {
   const [localClosedMessage, setLocalClosedMessage] = useState('');
   const [localMinQty, setLocalMinQty] = useState<Record<string, number>>({});
   const [isSaving, setIsSaving] = useState(false);
+
+  // Sauce management panel state
+  const [showSaucePanel, setShowSaucePanel] = useState(false);
+  const [newSauceName, setNewSauceName] = useState('');
+  const [newSaucePrice, setNewSaucePrice] = useState(0);
+  const [editingSauceId, setEditingSauceId] = useState<string | null>(null);
+  const [editSauceName, setEditSauceName] = useState('');
+  const [editSaucePrice, setEditSaucePrice] = useState(0);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     const loadData = async () => {
@@ -74,6 +90,22 @@ export const AdminView: React.FC = () => {
     }
     setLocalMinQty(map);
   }, [businessRules]);
+
+  // Resolve sauce names for all orders
+  useEffect(() => {
+    const fetchSauceNames = async () => {
+      const allItemOptions = orders.flatMap(order =>
+        order.items.map(item => item.selected_option_ids || [])
+      );
+      if (allItemOptions.some(opts => opts.length > 0)) {
+        const namesMap = await resolveAllOptionNames(allItemOptions);
+        setOptionNames(namesMap);
+      }
+    };
+    if (orders.length > 0) {
+      fetchSauceNames();
+    }
+  }, [orders]);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -115,14 +147,18 @@ export const AdminView: React.FC = () => {
     new: 'bg-blue-100 text-blue-700',
     preparing: 'bg-orange-100 text-orange-700',
     ready: 'bg-indigo-100 text-indigo-700',
+    out_for_delivery: 'bg-purple-100 text-purple-700',
     completed: 'bg-green-100 text-green-700',
+    cancelled: 'bg-red-100 text-red-700',
   };
 
   const statusLabels: Record<OrderStatus, string> = {
     new: 'جديد',
     preparing: 'قيد التحضير',
     ready: 'جاهز للاستلام',
+    out_for_delivery: 'في التوصيل',
     completed: 'تم التسليم',
+    cancelled: 'ملغي',
   };
 
   const isWebsiteOpen = globalSettings?.is_website_open ?? true;
@@ -199,6 +235,12 @@ export const AdminView: React.FC = () => {
           <div className="space-y-6">
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-bold text-slate-900">الطلبات الواردة</h2>
+              <button
+                onClick={() => { setShowSaucePanel(true); fetchAllOptionGroups(); }}
+                className="flex items-center gap-2 bg-amber-50 text-amber-700 px-4 py-2 rounded-xl font-bold text-sm hover:bg-amber-100 transition-all border border-amber-200"
+              >
+                🍟 إدارة الصوصات
+              </button>
             </div>
 
             <div className="grid grid-cols-1 gap-4">
@@ -292,14 +334,28 @@ export const AdminView: React.FC = () => {
                         <h4 className="font-bold text-slate-700 text-sm uppercase tracking-wider">الأصناف المطلوبة</h4>
                         <div className="space-y-3">
                           {order.items.map((item) => (
-                            <div key={item.id} className="flex justify-between items-center text-slate-800">
-                              <div className="flex items-center gap-3">
-                                <span className="bg-slate-100 text-slate-700 w-8 h-8 rounded-lg flex items-center justify-center font-bold">
-                                  {item.quantity}
-                                </span>
-                                <span className="font-medium">{item.name_ar}</span>
+                            <div key={item.id} className="flex justify-between items-start text-slate-800">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-3">
+                                  <span className="bg-slate-100 text-slate-700 w-8 h-8 rounded-lg flex items-center justify-center font-bold">
+                                    {item.quantity}
+                                  </span>
+                                  <span className="font-semibold text-sm">{item.name_ar}</span>
+                                </div>
+                                <div className="mr-11 space-y-0.5 mt-0.5">
+                                  {item.selected_option_ids && item.selected_option_ids.length > 0 && (
+                                    <p className="text-[10px] text-slate-500 font-bold">
+                                      🍟 {item.selected_option_ids.map((id: string) => optionNames.get(id)).filter(Boolean).join('، ')}
+                                    </p>
+                                  )}
+                                  {item.special_instructions && (
+                                    <p className="text-[10px] text-slate-400 font-medium">
+                                      — {item.special_instructions}
+                                    </p>
+                                  )}
+                                </div>
                               </div>
-                              <span className="font-bold">{item.price * item.quantity} ج.م</span>
+                              <span className="font-bold text-sm mt-1">{item.unit_price * item.quantity} ج.م</span>
                             </div>
                           ))}
                           <div className="border-t pt-3 mt-3 flex justify-between items-center text-lg font-black text-slate-900">
@@ -560,6 +616,231 @@ export const AdminView: React.FC = () => {
           onClose={() => setEditingProduct(null)}
         />
       )}
+
+      {/* Sauce Management Slide-Over Panel */}
+      <AnimatePresence>
+        {showSaucePanel && (
+          <>
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowSaucePanel(false)}
+              className="fixed inset-0 bg-black/30 backdrop-blur-sm z-[60]"
+            />
+
+            {/* Panel */}
+            <motion.div
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+              className="fixed top-0 right-0 h-full w-full max-w-md bg-white shadow-2xl z-[70] flex flex-col"
+              dir="rtl"
+            >
+              {/* Panel Header */}
+              <div className="flex items-center justify-between p-5 border-b bg-gradient-to-l from-amber-50 to-white">
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">🍟</span>
+                  <div>
+                    <h3 className="text-lg font-black text-slate-900">إدارة الصوصات</h3>
+                    <p className="text-xs text-slate-500">تشغيل / إيقاف / إضافة / تعديل</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowSaucePanel(false)}
+                  className="p-2 hover:bg-slate-100 rounded-xl transition-all"
+                >
+                  <X className="w-5 h-5 text-slate-500" />
+                </button>
+              </div>
+
+              {/* Panel Body */}
+              <div className="flex-1 overflow-y-auto p-5 space-y-6">
+                {allOptionGroups.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-16 gap-3">
+                    <Loader2 className="w-6 h-6 text-amber-500 animate-spin" />
+                    <p className="text-sm text-slate-500">جاري تحميل الصوصات...</p>
+                  </div>
+                ) : (
+                  allOptionGroups.map((group) => (
+                    <div key={group.id}>
+                      <div className="flex items-center gap-2 mb-3">
+                        <h4 className="font-bold text-slate-700">{group.name_ar}</h4>
+                        <span className="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">
+                          {group.options?.length || 0} صنف
+                        </span>
+                      </div>
+
+                      <div className="space-y-2">
+                        {group.options?.map((option) => (
+                          <div
+                            key={option.id}
+                            className={clsx(
+                              "bg-white border rounded-xl p-3 transition-all",
+                              option.is_active ? "border-slate-200" : "border-red-200 bg-red-50/30"
+                            )}
+                          >
+                            {editingSauceId === option.id ? (
+                              /* ── Inline Edit Mode ── */
+                              <div className="space-y-2">
+                                <input
+                                  type="text"
+                                  value={editSauceName}
+                                  onChange={(e) => setEditSauceName(e.target.value)}
+                                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-medium text-right focus:outline-none focus:ring-2 focus:ring-amber-300"
+                                  placeholder="اسم الصوص"
+                                />
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="number"
+                                    value={editSaucePrice}
+                                    onChange={(e) => setEditSaucePrice(Number(e.target.value))}
+                                    className="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm text-right focus:outline-none focus:ring-2 focus:ring-amber-300"
+                                    placeholder="السعر"
+                                    min={0}
+                                  />
+                                  <button
+                                    onClick={async () => {
+                                      if (!editSauceName.trim()) { toast.error('اسم الصوص مطلوب'); return; }
+                                      await updateOption(option.id, { name_ar: editSauceName.trim(), price_delta: editSaucePrice });
+                                      setEditingSauceId(null);
+                                      toast.success('تم التعديل');
+                                    }}
+                                    className="bg-green-600 text-white px-3 py-2 rounded-lg text-sm font-bold hover:bg-green-700 transition-all"
+                                  >
+                                    <Save className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    onClick={() => setEditingSauceId(null)}
+                                    className="bg-slate-100 text-slate-600 px-3 py-2 rounded-lg text-sm font-bold hover:bg-slate-200 transition-all"
+                                  >
+                                    <X className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              </div>
+                            ) : deletingId === option.id ? (
+                              /* ── Delete Confirmation ── */
+                              <div className="flex items-center justify-between">
+                                <p className="text-sm text-red-600 font-bold">حذف "{option.name_ar}"؟</p>
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={async () => {
+                                      await deleteOption(option.id);
+                                      setDeletingId(null);
+                                      toast.success('تم الحذف');
+                                    }}
+                                    className="bg-red-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-700 transition-all"
+                                  >
+                                    نعم، احذف
+                                  </button>
+                                  <button
+                                    onClick={() => setDeletingId(null)}
+                                    className="bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-slate-200 transition-all"
+                                  >
+                                    إلغاء
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              /* ── Normal Display ── */
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                  {/* Toggle Switch */}
+                                  <button
+                                    onClick={() => {
+                                      toggleOptionActive(option.id);
+                                      toast.success(option.is_active ? `تم إيقاف "${option.name_ar}"` : `تم تفعيل "${option.name_ar}"`);
+                                    }}
+                                    className="transition-all"
+                                  >
+                                    {option.is_active ? (
+                                      <ToggleRight className="w-8 h-8 text-green-500" />
+                                    ) : (
+                                      <ToggleLeft className="w-8 h-8 text-slate-300" />
+                                    )}
+                                  </button>
+                                  <div>
+                                    <p className={clsx("text-sm font-bold", option.is_active ? "text-slate-800" : "text-slate-400 line-through")}>
+                                      {option.name_ar}
+                                    </p>
+                                    {option.price_delta > 0 && (
+                                      <p className="text-xs text-slate-400">+{option.price_delta} ج.م</p>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => {
+                                      setEditingSauceId(option.id);
+                                      setEditSauceName(option.name_ar);
+                                      setEditSaucePrice(option.price_delta);
+                                    }}
+                                    className="p-2 hover:bg-slate-100 rounded-lg transition-all"
+                                    title="تعديل"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5 text-slate-400" />
+                                  </button>
+                                  <button
+                                    onClick={() => setDeletingId(option.id)}
+                                    className="p-2 hover:bg-red-50 rounded-lg transition-all"
+                                    title="حذف"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Add New Sauce Form */}
+                      <div className="mt-3 bg-slate-50 border border-dashed border-slate-200 rounded-xl p-3">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={newSauceName}
+                            onChange={(e) => setNewSauceName(e.target.value)}
+                            className="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm text-right bg-white focus:outline-none focus:ring-2 focus:ring-amber-300"
+                            placeholder="اسم الصوص الجديد..."
+                          />
+                          <input
+                            type="number"
+                            value={newSaucePrice}
+                            onChange={(e) => setNewSaucePrice(Number(e.target.value))}
+                            className="w-20 border border-slate-200 rounded-lg px-3 py-2 text-sm text-right bg-white focus:outline-none focus:ring-2 focus:ring-amber-300"
+                            placeholder="السعر"
+                            min={0}
+                          />
+                          <button
+                            onClick={async () => {
+                              if (!newSauceName.trim()) { toast.error('اسم الصوص مطلوب'); return; }
+                              const result = await createOption(group.id, { name_ar: newSauceName.trim(), price_delta: newSaucePrice });
+                              if (result) {
+                                setNewSauceName('');
+                                setNewSaucePrice(0);
+                                toast.success(`تم إضافة "${result.name_ar}"`);
+                              } else {
+                                toast.error('فشل في الإضافة');
+                              }
+                            }}
+                            className="bg-amber-500 text-white p-2 rounded-lg hover:bg-amber-600 transition-all shadow-sm"
+                          >
+                            <Plus className="w-5 h-5" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

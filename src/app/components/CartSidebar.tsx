@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Plus, Minus, ShoppingBag, Trash2, ArrowRight, AlertTriangle } from 'lucide-react';
 import { useStore, Order } from '../store/useStore';
 import { motion, AnimatePresence } from 'motion/react';
@@ -11,9 +11,21 @@ interface CartSidebarProps {
 }
 
 export const CartSidebar: React.FC<CartSidebarProps> = ({ isOpen, onClose, onCheckout }) => {
-  const { cart, updateQuantity, removeFromCart, orderType, categories, businessRules } = useStore();
+  const { cart, updateQuantity, removeFromCart, orderType, categories, businessRules, optionGroupsByProductId, fetchProductOptionGroups } = useStore();
 
-  const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const total = cart.reduce((sum, item) => {
+    const itemTotal = (item.price + (item.optionsPrice || 0)) * item.quantity;
+    return sum + itemTotal;
+  }, 0);
+
+  // Ensure option data is loaded for cart items that have selections
+  useEffect(() => {
+    cart.forEach(item => {
+      if (item.selectedOptionIds?.length && !optionGroupsByProductId[item.id]) {
+        fetchProductOptionGroups(item.id);
+      }
+    });
+  }, [cart, optionGroupsByProductId, fetchProductOptionGroups]);
 
   // Calculate minimum quantity violations
   const getMinQtyWarnings = () => {
@@ -107,59 +119,89 @@ export const CartSidebar: React.FC<CartSidebarProps> = ({ isOpen, onClose, onChe
                 </button>
               </motion.div>
             ) : (
-              cart.map((item) => (
-                <motion.div
-                  layout
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, x: -100 }}
-                  key={item.cartKey}
-                  className="flex gap-4 bg-white p-3 rounded-2xl border border-slate-100 shadow-sm group hover:border-red-100 transition-all"
-                >
-                  <div className="w-20 h-20 rounded-xl overflow-hidden bg-slate-100 shrink-0">
-                    <img
-                      src={item.image_url}
-                      alt={item.name_ar}
-                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
-                    />
-                  </div>
-                  <div className="flex-grow flex flex-col justify-between">
-                    <div className="flex justify-between items-start">
-                      <h4 className="font-bold text-slate-900 leading-tight line-clamp-1">{item.name_ar}</h4>
-                      <button
-                        onClick={() => removeFromCart(item.cartKey)}
-                        className="bg-red-50 text-red-500 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-all hover:bg-red-100"
-                        title="حذف"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+              cart.map((item) => {
+                const itemSauces = item.selectedOptionIds?.map(id => {
+                  const option = (optionGroupsByProductId[item.id] || [])
+                    .flatMap(g => g.options || [])
+                    .find(o => o.id === id);
+                  return option ? { name: option.name_ar, active: option.is_active } : null;
+                }).filter(Boolean) as { name: string; active: boolean }[] | undefined;
+
+                const hasUnavailableSauce = itemSauces?.some(s => !s.active);
+
+                return (
+                  <motion.div
+                    layout
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, x: -100 }}
+                    key={item.cartKey}
+                    className="flex gap-4 bg-white p-3 rounded-2xl border border-slate-100 shadow-sm group hover:border-red-100 transition-all"
+                  >
+                    <div className="w-20 h-20 rounded-xl overflow-hidden bg-slate-100 shrink-0">
+                      <img
+                        src={item.image_url}
+                        alt={item.name_ar}
+                        className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                      />
                     </div>
-                    {item.specialInstructions && (
-                      <p className="text-xs text-slate-400 font-medium mt-0.5 line-clamp-1">
-                        — ملاحظة: {item.specialInstructions}
-                      </p>
-                    )}
-                    <div className="flex items-center justify-between mt-2">
-                      <div className="flex items-center gap-3 bg-slate-50 rounded-lg px-2 py-1 border border-slate-100">
+                    <div className="flex-grow flex flex-col justify-between">
+                      <div className="flex justify-between items-start">
+                        <h4 className="font-bold text-slate-900 leading-tight line-clamp-1">{item.name_ar}</h4>
                         <button
-                          onClick={() => updateQuantity(item.cartKey, -1)}
-                          className="p-1 hover:text-primary transition-colors active:scale-90"
+                          onClick={() => removeFromCart(item.cartKey)}
+                          className="bg-red-50 text-red-500 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-all hover:bg-red-100"
+                          title="حذف"
                         >
-                          <Minus className="w-3.5 h-3.5" />
-                        </button>
-                        <span className="font-bold w-4 text-center text-sm">{item.quantity}</span>
-                        <button
-                          onClick={() => updateQuantity(item.cartKey, 1)}
-                          className="p-1 hover:text-primary transition-colors active:scale-90"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
+                          <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
-                      <span className="font-bold text-primary">{item.price * item.quantity} ج.م</span>
+                      <div className="space-y-0.5">
+                        {itemSauces && itemSauces.length > 0 && (
+                          <p className="text-[10px] text-slate-500 font-bold flex items-center gap-1 flex-wrap">
+                            <span className="text-primary/70">🍟</span>
+                            {itemSauces.map((s, i) => (
+                              <span key={i}>
+                                <span className={!s.active ? 'line-through text-red-400' : ''}>
+                                  {s.name}
+                                </span>
+                                {!s.active && <span className="text-[8px] text-red-500 mr-0.5">⚠️</span>}
+                                {i < itemSauces.length - 1 && '، '}
+                              </span>
+                            ))}
+                          </p>
+                        )}
+                        {hasUnavailableSauce && (
+                          <p className="text-[9px] text-red-500 font-bold">⚠️ صوص غير متوفر حالياً</p>
+                        )}
+                        {item.specialInstructions && (
+                          <p className="text-[10px] text-slate-400 font-medium line-clamp-1">
+                            — {item.specialInstructions}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex items-center justify-between mt-2">
+                        <div className="flex items-center gap-3 bg-slate-50 rounded-lg px-2 py-1 border border-slate-100">
+                          <button
+                            onClick={() => updateQuantity(item.cartKey, -1)}
+                            className="p-1 hover:text-primary transition-colors active:scale-90"
+                          >
+                            <Minus className="w-3.5 h-3.5" />
+                          </button>
+                          <span className="font-bold w-4 text-center text-sm">{item.quantity}</span>
+                          <button
+                            onClick={() => updateQuantity(item.cartKey, 1)}
+                            className="p-1 hover:text-primary transition-colors active:scale-90"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        <span className="font-bold text-primary">{(item.price + (item.optionsPrice || 0)) * item.quantity} ج.م</span>
+                      </div>
                     </div>
-                  </div>
-                </motion.div>
-              ))
+                  </motion.div>
+                );
+              })
             )}
           </AnimatePresence>
         </div>
