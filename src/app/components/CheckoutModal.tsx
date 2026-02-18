@@ -56,7 +56,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
 
     if (orderId) {
       setStep(2);
-      clearCart();
+      await clearCart();
       toast.success('تم استلام طلبك بنجاح!', {
         description: `رقم الطلب: #${orderId.slice(0, 8).toUpperCase()}`,
       });

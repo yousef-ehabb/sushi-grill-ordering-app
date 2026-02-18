@@ -97,7 +97,7 @@ interface AppState {
   addToCartWithDetails: (product: Product, quantity: number, specialInstructions?: string) => void;
   removeFromCart: (cartKey: string) => void;
   updateQuantity: (cartKey: string, delta: number) => void;
-  clearCart: () => void;
+  clearCart: () => Promise<void>;
 
   // Order Actions
   submitOrder: (order: Omit<Order, 'id' | 'created_at' | 'status' | 'items'> & { items: CartItem[] }) => Promise<string | null>;
@@ -113,6 +113,11 @@ interface AppState {
   updateGlobalSettings: (data: Partial<Pick<GlobalSettings, 'is_website_open' | 'closed_message'>>) => Promise<void>;
   toggleCategoryActive: (categoryId: string) => Promise<void>;
   updateBusinessRule: (categoryId: string, minQuantity: number) => Promise<void>;
+
+  // Abandoned Cart Actions
+  syncCartToDB: (userId: string) => Promise<void>;
+  restoreCartFromDB: (userId: string) => Promise<boolean>;
+  checkAbandonedCart: (userId: string) => Promise<{ hasAbandoned: boolean; cartAge?: number }>;
 }
 
 export const useStore = create<AppState>()(
@@ -308,7 +313,10 @@ export const useStore = create<AppState>()(
           ),
         })),
 
-      clearCart: () => set({ cart: [], orderType: null }),
+      clearCart: async () => {
+        set({ cart: [], orderType: null });
+        // Cart completion will be handled by syncCartToDB when called with empty cart
+      },
 
       // ── Order Submission ───────────────────────────────────
 
@@ -379,6 +387,14 @@ export const useStore = create<AppState>()(
 
           if (itemsError) {
             throw new Error(itemsError?.message || 'Failed to save order items');
+          }
+
+          // Mark cart as completed in DB
+          if (orderData.user_id) {
+            await insforge.database
+              .from('carts')
+              .update({ status: 'completed' })
+              .eq('user_id', orderData.user_id);
           }
 
           set({ loading: false });
@@ -599,6 +615,110 @@ export const useStore = create<AppState>()(
             }));
           }
         }
+      },
+
+      // ── Abandoned Cart Actions ────────────────────────────────
+
+      syncCartToDB: async (userId: string) => {
+        const { cart } = get();
+        if (!userId || cart.length === 0) {
+          // If cart is empty, mark as completed or delete
+          const { error } = await insforge.database
+            .from('carts')
+            .update({ status: 'completed' })
+            .eq('user_id', userId)
+            .neq('status', 'completed');
+          
+          if (error) {
+            console.error('Failed to mark cart as completed:', error);
+          }
+          return;
+        }
+
+        const itemsJson = cart.map(item => ({
+          product_id: item.id,
+          quantity: item.quantity,
+          special_instructions: item.specialInstructions || null,
+          price: item.price,
+          name_ar: item.name_ar,
+        }));
+
+        const { error } = await insforge.database
+          .from('carts')
+          .upsert(
+            {
+              user_id: userId,
+              items: itemsJson,
+              status: 'active',
+              updated_at: new Date().toISOString(),
+            },
+            {
+              onConflict: 'user_id',
+            }
+          );
+
+        if (error) {
+          console.error('Failed to sync cart to DB:', error);
+        }
+      },
+
+      restoreCartFromDB: async (userId: string) => {
+        const { data, error } = await insforge.database
+          .from('carts')
+          .select('*')
+          .eq('user_id', userId)
+          .eq('status', 'active')
+          .single();
+
+        if (error || !data) {
+          return false;
+        }
+
+        const { products } = get();
+        const restoredItems: CartItem[] = [];
+
+        for (const item of (data.items as any[])) {
+          const product = products.find(p => p.id === item.product_id);
+          if (product && product.is_available) {
+            restoredItems.push({
+              ...product,
+              quantity: item.quantity,
+              specialInstructions: item.special_instructions || undefined,
+              cartKey: item.special_instructions
+                ? `${product.id}-${Date.now()}-${restoredItems.length}`
+                : product.id,
+            });
+          }
+        }
+
+        if (restoredItems.length > 0) {
+          set({ cart: restoredItems });
+          return true;
+        }
+
+        return false;
+      },
+
+      checkAbandonedCart: async (userId: string) => {
+        const { data, error } = await insforge.database
+          .from('carts')
+          .select('updated_at, items')
+          .eq('user_id', userId)
+          .eq('status', 'active')
+          .single();
+
+        if (error || !data || !data.items || (data.items as any[]).length === 0) {
+          return { hasAbandoned: false };
+        }
+
+        const updatedAt = new Date(data.updated_at);
+        const now = new Date();
+        const ageMinutes = (now.getTime() - updatedAt.getTime()) / (1000 * 60);
+
+        return {
+          hasAbandoned: ageMinutes > 5,
+          cartAge: ageMinutes,
+        };
       },
     }),
     {

@@ -15,17 +15,32 @@ import { ActiveOrderModal } from './components/ActiveOrderModal';
 import { useStore } from './store/useStore';
 import { useAuthStore } from './store/useAuthStore';
 import { ShoppingBag, UtensilsCrossed, Phone, XCircle, User, LogIn, ClipboardList } from 'lucide-react';
-import { Toaster } from 'sonner';
+import { Toaster, toast } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
+import { registerServiceWorker, subscribeToPushNotifications } from '../lib/pushNotifications';
 
 const CustomerLayout: React.FC = () => {
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [isActiveOrderOpen, setIsActiveOrderOpen] = useState(false);
-  const { cart, globalSettings, fetchGlobalSettings, activeOrder, fetchActiveOrder } = useStore();
+  const { 
+    cart, 
+    globalSettings, 
+    fetchGlobalSettings, 
+    activeOrder, 
+    fetchActiveOrder,
+    syncCartToDB,
+    restoreCartFromDB,
+    checkAbandonedCart,
+  } = useStore();
   const { isAuthenticated, user, initSession } = useAuthStore();
   const isOpen = globalSettings?.is_website_open ?? true;
   const [isScrolled, setIsScrolled] = useState(false);
+
+  // Register service worker on mount
+  useEffect(() => {
+    registerServiceWorker();
+  }, []);
 
   useEffect(() => {
     initSession();
@@ -48,6 +63,88 @@ const CustomerLayout: React.FC = () => {
     const interval = setInterval(fetchActiveOrder, 30_000);
     return () => clearInterval(interval);
   }, [isAuthenticated]);
+
+  // Subscribe to push notifications when authenticated
+  useEffect(() => {
+    if (isAuthenticated && user) {
+      subscribeToPushNotifications(user.id).catch(console.error);
+    }
+  }, [isAuthenticated, user]);
+
+  // Check for abandoned cart on mount/auth change
+  useEffect(() => {
+    if (!isAuthenticated || !user) return;
+
+    const checkCart = async () => {
+      const result = await checkAbandonedCart(user.id);
+      if (result.hasAbandoned) {
+        const restored = await restoreCartFromDB(user.id);
+        if (restored) {
+          toast.info('مرحباً بعودتك! لديك عناصر في سلة المشتريات', {
+            description: 'تم استعادة سلة المشتريات الخاصة بك',
+            duration: 5000,
+            action: {
+              label: 'عرض السلة',
+              onClick: () => setIsCartOpen(true),
+            },
+          });
+        }
+      }
+    };
+
+    checkCart();
+  }, [isAuthenticated, user]);
+
+  // Sync cart to DB when cart changes (debounced)
+  useEffect(() => {
+    if (!isAuthenticated || !user || cart.length === 0) return;
+
+    const timeoutId = setTimeout(() => {
+      syncCartToDB(user.id).catch(console.error);
+    }, 2000); // Debounce 2 seconds
+
+    return () => clearTimeout(timeoutId);
+  }, [cart, isAuthenticated, user]);
+
+  // Inactivity timer: Show notification if user is inactive for 30 mins with items in cart
+  useEffect(() => {
+    if (!isAuthenticated || !user || cart.length === 0) return;
+
+    let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
+    let lastActivity = Date.now();
+
+    const resetTimer = () => {
+      lastActivity = Date.now();
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => {
+        const inactiveMinutes = (Date.now() - lastActivity) / (1000 * 60);
+        if (inactiveMinutes >= 5) {
+          toast.warning('السوشي بيقولك فينّك؟', {
+            description: 'السوشي لسه مستنيك في الكارت… نكمّل ولا إيه؟',
+            duration: 8000,
+            action: {
+              label: 'عرض السلة',
+              onClick: () => setIsCartOpen(true),
+            },
+          });
+        }
+      }, 5 * 60 * 1000); // 5 minutes
+    };
+
+    const events = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart'];
+    events.forEach(event => {
+      document.addEventListener(event, resetTimer, { passive: true });
+    });
+
+    resetTimer();
+
+    return () => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      events.forEach(event => {
+        document.removeEventListener(event, resetTimer);
+      });
+    };
+  }, [isAuthenticated, user, cart.length]);
 
   const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
 
