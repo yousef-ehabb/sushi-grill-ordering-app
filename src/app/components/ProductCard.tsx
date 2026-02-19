@@ -10,7 +10,14 @@ interface ProductCardProps {
 }
 
 export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
-  const { addToCart, categories, globalSettings, fetchProductOptionGroups, optionGroupsByProductId } = useStore();
+  const {
+    addToCart,
+    categories,
+    globalSettings,
+    fetchProductOptionGroups,
+    optionGroupsByProductId,
+    optionGroupLoadingByProductId,
+  } = useStore();
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [isOptionSheetOpen, setIsOptionSheetOpen] = useState(false);
 
@@ -19,19 +26,23 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
   const isWebsiteClosed = globalSettings && !globalSettings.is_website_open;
   const isDisabled = !product.is_available || !!isCategoryInactive || !!isWebsiteClosed;
 
-  const groups = optionGroupsByProductId[product.id] || [];
-  const hasOptions = groups.length > 0;
+  const groups = optionGroupsByProductId[product.id];
+  const isLoadingOptionGroups = !!optionGroupLoadingByProductId[product.id] || groups === undefined;
+  const resolvedGroups = groups || [];
+  const hasOptions = resolvedGroups.length > 0;
 
   // Prefetch option groups so we know if this product requires configuration
   useEffect(() => {
-    fetchProductOptionGroups(product.id);
-  }, [product.id, fetchProductOptionGroups]);
+    if (optionGroupsByProductId[product.id] === undefined) {
+      fetchProductOptionGroups(product.id);
+    }
+  }, [product.id, fetchProductOptionGroups, optionGroupsByProductId]);
 
   const handleAddToCart = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isDisabled) return;
 
-    if (hasOptions) {
+    if (isLoadingOptionGroups || hasOptions) {
       // Product has modifiers → open configurator
       setIsOptionSheetOpen(true);
     } else {
@@ -98,17 +109,17 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
 
           <button
             onClick={handleAddToCart}
-            disabled={isDisabled}
+            disabled={isDisabled || isLoadingOptionGroups}
             className={`w-full py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-[0.98]
-              ${!isDisabled
+              ${!isDisabled && !isLoadingOptionGroups
                 ? 'bg-slate-900 text-white hover:bg-primary hover:shadow-lg hover:shadow-red-500/20'
                 : 'bg-slate-100 text-slate-400 cursor-not-allowed'
               }`}
           >
-            <div className={`p-1 rounded-full ${!isDisabled ? 'bg-white/20' : 'bg-slate-200'}`}>
+            <div className={`p-1 rounded-full ${!isDisabled && !isLoadingOptionGroups ? 'bg-white/20' : 'bg-slate-200'}`}>
               <Plus className="w-4 h-4" />
             </div>
-            <span>أضف للسلة</span>
+            <span>{isLoadingOptionGroups ? 'جاري التحضير...' : 'أضف للسلة'}</span>
           </button>
         </div>
       </div>

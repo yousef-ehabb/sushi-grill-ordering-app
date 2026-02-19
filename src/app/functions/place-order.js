@@ -22,12 +22,11 @@ export default async function (req) {
             user_id,
             type,
             items,
-            client_total
+            client_total,
         } = body;
 
         const errors = [];
 
-        // 0. Input validation
         if (!customer_name || typeof customer_name !== 'string' || customer_name.trim().length === 0) {
             errors.push('الاسم مطلوب');
         } else if (customer_name.trim().length > 200) {
@@ -44,29 +43,51 @@ export default async function (req) {
             errors.push('نوع الطلب غير صالح');
         }
 
-        if (errors.length > 0) {
-            return new Response(JSON.stringify({
-                success: false,
-                errors,
-                code: 'VALIDATION_FAILED'
-            }), { status: 400, headers });
-        }
-
         if (!items || !Array.isArray(items) || items.length === 0) {
             return new Response(JSON.stringify({
                 success: false,
                 error: 'الطلب فارغ',
-                code: 'EMPTY_ORDER'
+                code: 'EMPTY_ORDER',
             }), { status: 400, headers });
         }
 
-        // Create InsForge client
+        const validatedItems = [];
+        for (let index = 0; index < items.length; index += 1) {
+            const item = items[index];
+            const quantity = Number(item?.quantity);
+
+            if (!item || item.product_id == null || item.category_id == null || !Number.isFinite(quantity) || quantity <= 0) {
+                errors.push(`بيانات عنصر غير صالحة عند الفهرس ${index} (product_id/category_id/quantity)`);
+                continue;
+            }
+
+            validatedItems.push({
+                product_id: item.product_id,
+                category_id: item.category_id,
+                quantity,
+                selected_option_ids: Array.isArray(item.selected_option_ids)
+                    ? item.selected_option_ids.filter((id) => typeof id === 'string')
+                    : [],
+                special_instructions: typeof item.special_instructions === 'string'
+                    ? item.special_instructions.trim().slice(0, 200)
+                    : undefined,
+                index,
+            });
+        }
+
+        if (errors.length > 0) {
+            return new Response(JSON.stringify({
+                success: false,
+                errors,
+                code: 'VALIDATION_FAILED',
+            }), { status: 400, headers });
+        }
+
         const client = createClient({
             baseUrl: Deno.env.get('INSFORGE_BASE_URL'),
             anonKey: Deno.env.get('ANON_KEY'),
         });
 
-        // 1. Check website status
         const { data: settingsData, error: settingsErr } = await client.database
             .from('global_settings')
             .select('is_website_open, closed_message')
@@ -80,15 +101,13 @@ export default async function (req) {
             return new Response(JSON.stringify({
                 success: false,
                 error: message,
-                code: 'WEBSITE_CLOSED'
+                code: 'WEBSITE_CLOSED',
             }), { status: 400, headers });
         }
 
-        // 2. Get unique category and product IDs
-        const categoryIds = [...new Set(items.map(i => i.category_id))];
-        const productIds = items.map(i => i.product_id);
+        const categoryIds = [...new Set(validatedItems.map((i) => i.category_id))];
+        const productIds = [...new Set(validatedItems.map((i) => i.product_id))];
 
-        // 3. Check category active status
         const { data: categories, error: catErr } = await client.database
             .from('categories')
             .select('id, name_ar, is_active')
@@ -104,7 +123,6 @@ export default async function (req) {
             }
         }
 
-        // 4. Check product availability and get base prices
         const { data: products, error: prodErr } = await client.database
             .from('products')
             .select('id, name_ar, is_available, price')
@@ -120,7 +138,6 @@ export default async function (req) {
             }
         }
 
-        // 5. Check minimum quantity rules
         const { data: rules, error: rulesErr } = await client.database
             .from('business_rules')
             .select('category_id, min_quantity')
@@ -134,7 +151,7 @@ export default async function (req) {
         }
 
         const categoryQuantities = {};
-        for (const item of items) {
+        for (const item of validatedItems) {
             if (!categoryQuantities[item.category_id]) {
                 categoryQuantities[item.category_id] = 0;
             }
@@ -149,7 +166,6 @@ export default async function (req) {
             }
         }
 
-        // 6. Get option groups and options for ordered products
         const { data: optionGroupsRaw, error: ogErr } = await client.database
             .from('product_option_groups')
             .select('id, product_id, name_ar, min_select, max_select, is_active, product_options(id, name_ar, price_delta, is_active)')
@@ -163,24 +179,29 @@ export default async function (req) {
             if (!groupsByProduct[group.product_id]) {
                 groupsByProduct[group.product_id] = [];
             }
-            const activeOptions = (group.product_options || []).filter(o => o.is_active);
             groupsByProduct[group.product_id].push({
                 id: group.id,
                 product_id: group.product_id,
                 name_ar: group.name_ar,
                 min_select: group.min_select,
                 max_select: group.max_select,
-                options: activeOptions,
+                product_options: group.product_options || [],
             });
         }
 
-        // 7. Validate options per item and compute total
         let computedTotal = 0;
         const itemsToInsert = [];
 
-        for (const item of items) {
+        for (const item of validatedItems) {
             const product = productMap[item.product_id];
-            if (!product) continue;
+            if (!product) {
+                errors.push(`منتج غير معروف عند الفهرس ${item.index} (product_id: ${item.product_id})`);
+                continue;
+            }
+
+            if (!categoryMap[item.category_id]) {
+                errors.push(`قسم غير معروف عند الفهرس ${item.index} (category_id: ${item.category_id})`);
+            }
 
             const itemBaseTotal = product.price * item.quantity;
             computedTotal += itemBaseTotal;
@@ -194,12 +215,14 @@ export default async function (req) {
                 let priceDelta = 0;
 
                 for (const group of groups) {
-                    const opt = group.options.find(o => o.id === optId);
+                    const opt = (group.product_options || []).find((o) => o.id === optId);
                     if (opt) {
                         found = true;
                         isActive = opt.is_active;
                         priceDelta = opt.price_delta || 0;
-                        computedTotal += priceDelta * item.quantity;
+                        if (isActive) {
+                            computedTotal += priceDelta * item.quantity;
+                        }
                         break;
                     }
                 }
@@ -207,15 +230,14 @@ export default async function (req) {
                 if (!found) {
                     errors.push(`الخيار المحدد غير متوفر للمنتج "${product.name_ar}"`);
                 } else if (!isActive) {
-                    errors.push(`صوص "${product.name_ar}" غير متوفر حالياً`);
+                    errors.push(`خيار غير نشط للمنتج "${product.name_ar}"`);
                 }
             }
 
-            // Validate min/max selection per group
             for (const group of groups) {
-                const groupSelections = selectedOptions.filter(id =>
-                    group.options.some(o => o.id === id)
-                );
+                const activeOptions = (group.product_options || []).filter((o) => o.is_active);
+                const activeOptionIds = activeOptions.map((o) => o.id);
+                const groupSelections = selectedOptions.filter((id) => activeOptionIds.includes(id));
 
                 if (groupSelections.length < group.min_select) {
                     errors.push(`يرجى اختيار ${group.min_select} صنف على الأقل من "${group.name_ar}"`);
@@ -225,13 +247,17 @@ export default async function (req) {
                 }
             }
 
-            const unitPrice = product.price + (selectedOptions.reduce((sum, optId) => {
+            const unitOptionsTotal = selectedOptions.reduce((sum, optId) => {
                 for (const group of groups) {
-                    const opt = group.options.find(o => o.id === optId);
-                    if (opt) return sum + (opt.price_delta || 0);
+                    const opt = (group.product_options || []).find((o) => o.id === optId);
+                    if (opt && opt.is_active) {
+                        return sum + (opt.price_delta || 0);
+                    }
                 }
                 return sum;
-            }, 0));
+            }, 0);
+
+            const unitPrice = product.price + unitOptionsTotal;
 
             itemsToInsert.push({
                 product_id: item.product_id,
@@ -243,8 +269,7 @@ export default async function (req) {
             });
         }
 
-        // 8. Verify total matches
-        if (client_total !== undefined && Math.abs(computedTotal - client_total) > 1) {
+        if (client_total !== undefined && Math.abs(computedTotal - Number(client_total)) > 1) {
             errors.push('خطأ في حساب السعر الإجمالي');
         }
 
@@ -252,55 +277,33 @@ export default async function (req) {
             return new Response(JSON.stringify({
                 success: false,
                 errors,
-                code: 'VALIDATION_FAILED'
+                code: 'VALIDATION_FAILED',
             }), { status: 400, headers });
         }
 
-        // 9. Create order (no stock tracking)
-        const { data: orderData, error: orderErr } = await client.database
-            .from('orders')
-            .insert({
-                customer_name: customer_name.trim(),
-                customer_phone: customer_phone.trim(),
-                address: address?.trim() || null,
-                user_id: user_id || null,
-                type,
-                total: computedTotal,
-                status: 'new',
-            })
-            .select('id, created_at')
-            .single();
+        const { data: orderData, error: orderErr } = await client.database.rpc('create_order_with_items', {
+            p_customer_name: customer_name.trim(),
+            p_customer_phone: customer_phone.trim(),
+            p_address: address?.trim() || null,
+            p_user_id: user_id || null,
+            p_type: type,
+            p_total: computedTotal,
+            p_items: itemsToInsert,
+        });
 
-        if (orderErr) throw orderErr;
+        if (orderErr) {
+            throw orderErr;
+        }
 
-        const orderId = orderData.id;
-        const createdAt = orderData.created_at;
-
-        // 10. Insert order items
-        const orderItems = itemsToInsert.map(item => ({
-            order_id: orderId,
-            product_id: item.product_id,
-            name_ar: item.name_ar,
-            quantity: item.quantity,
-            unit_price: item.unit_price,
-            special_instructions: item.special_instructions,
-            selected_option_ids: item.selected_option_ids,
-        }));
-
-        const { error: itemsErr } = await client.database
-            .from('order_items')
-            .insert(orderItems);
-
-        if (itemsErr) {
-            // Rollback: delete the order if items fail
-            await client.database.from('orders').delete().eq('id', orderId);
-            throw itemsErr;
+        const createdOrder = Array.isArray(orderData) ? orderData[0] : orderData;
+        if (!createdOrder?.id) {
+            throw new Error('Order transaction did not return an order id');
         }
 
         return new Response(JSON.stringify({
             success: true,
-            order_id: orderId,
-            created_at: createdAt,
+            order_id: createdOrder.id,
+            created_at: createdOrder.created_at,
             total: computedTotal,
         }), { status: 200, headers });
 
@@ -309,8 +312,7 @@ export default async function (req) {
         return new Response(JSON.stringify({
             success: false,
             error: 'حدث خطأ في إنشاء الطلب',
-            detail: err?.message || String(err),
-            code: 'INTERNAL_ERROR'
+            code: 'INTERNAL_ERROR',
         }), { status: 500, headers });
     }
-}
+}

@@ -5,11 +5,11 @@
       "command": [
         "npx",
         "-y",
-        "@insforge/mcp@latest"
+        "@insforge/mcp@1.1.5"
       ],
       "environment": {
-        "API_KEY": "ik_a206d749d95e56b5a1fdab0ef5641099",
-        "API_BASE_URL": "http://localhost:7130"
+        "API_KEY": "${INSFORGE_API_KEY}",
+        "API_BASE_URL": "${INSFORGE_API_BASE_URL}"
       }
     }
   }

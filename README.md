@@ -54,7 +54,7 @@ src/
 ├── app/
 │   ├── components/       # UI Components (ProductCard, CartSidebar, AdminView...)
 │   ├── store/           # Zustand state management
-│   ├── functions/       # Edge functions (validate-order)
+│   ├── functions/       # Edge functions (place-order.js)
 │   ├── App.tsx          # Main application status & routing
 │   └── main.tsx         # Entry point
 ├── lib/                 # Utilities (InsForge client, helpers)

@@ -4,11 +4,11 @@ This plan addresses the technical risks identified during the codebase audit and
 
 ## Phase 1: Stability & Risk Mitigation (Immediate)
 *   **Atomic Order Submission:** Investigate Insforge's support for transactions to ensure `orders` and `order_items` are inserted atomically. If not supported, implement a "cleanup" logic in the `submitOrder` store action.
-*   **Price Validation:** Update the `validate-order` edge function to perform server-side price calculations. The frontend should only send IDs and quantities; the server should determine the final total to prevent price tampering.
+*   **Price Validation:** Update the `place-order` edge function to perform server-side price calculations. The frontend should only send IDs and quantities; the server should determine the final total to prevent price tampering.
 *   **Real-time Updates:** Replace the 30-second polling in `App.tsx` with Insforge real-time subscriptions for order status changes to improve UX and reduce server load.
 
 ## Phase 2: Feature Enhancement
-*   **Robust Inventory Management:** Add a `stock_quantity` field to products. Update the `validate-order` function to decrement stock upon successful submission.
+*   **Robust Inventory Management:** Add a `stock_quantity` field to products. Update the `place-order` function to decrement stock upon successful submission.
 *   **Advanced Analytics:** Build an admin dashboard module to visualize peak ordering times, best-selling items (using the `order_items` history), and customer retention.
 *   **Enhanced Auth Flow:** Implement "Remember Me" functionality and password reset via email/SMS.
 
@@ -21,4 +21,4 @@ This plan addresses the technical risks identified during the codebase audit and
 
 ## Maintenance Strategy
 *   **Dependency Audits:** Monthly check of `package.json` for security vulnerabilities.
-*   **Edge Function Logging:** Implement structured logging within `validate-order.js` to track and debug validation failures in production.
+*   **Edge Function Logging:** Implement structured logging within `place-order.js` to track and debug validation failures in production.

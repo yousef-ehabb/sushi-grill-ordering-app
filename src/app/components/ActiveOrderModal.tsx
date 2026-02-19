@@ -3,17 +3,8 @@ import { X, Clock, Truck, Store, ChefHat, Package, CheckCircle2, CircleDot, Load
 import { motion, AnimatePresence } from 'motion/react';
 import { insforge } from '../../lib/insforge';
 import { useAuthStore } from '../store/useAuthStore';
-import type { OrderStatus } from '../store/useStore';
+import type { OrderItem, OrderStatus } from '../store/useStore';
 import { resolveAllOptionNames } from '../utils/optionNames';
-
-interface OrderItem {
-    id: string;
-    name_ar: string;
-    quantity: number;
-    unit_price: number;
-    special_instructions?: string;
-    selected_option_ids?: string[];
-}
 
 interface ActiveOrderData {
     id: string;

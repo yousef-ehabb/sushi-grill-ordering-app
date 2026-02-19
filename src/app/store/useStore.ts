@@ -96,6 +96,7 @@ interface AppState {
   categories: Category[];
   products: Product[];
   optionGroupsByProductId: Record<string, OptionGroup[]>;
+  optionGroupLoadingByProductId: Record<string, boolean>;
   allOptionGroups: OptionGroup[];
   cart: CartItem[];
   orders: Order[];
@@ -156,6 +157,7 @@ export const useStore = create<AppState>()(
       categories: [],
       products: [],
       optionGroupsByProductId: {},
+      optionGroupLoadingByProductId: {},
       allOptionGroups: [],
       cart: [],
       orders: [],
@@ -194,6 +196,18 @@ export const useStore = create<AppState>()(
       },
 
       fetchProductOptionGroups: async (productId: string) => {
+        const state = get();
+        if (state.optionGroupsByProductId[productId] !== undefined || state.optionGroupLoadingByProductId[productId]) {
+          return;
+        }
+
+        set((current) => ({
+          optionGroupLoadingByProductId: {
+            ...current.optionGroupLoadingByProductId,
+            [productId]: true,
+          },
+        }));
+
         const { data: groups, error: groupError } = await insforge.database
           .from('product_option_groups')
           .select('*, options:product_options(*)')
@@ -203,6 +217,12 @@ export const useStore = create<AppState>()(
 
         if (groupError) {
           console.error('Failed to fetch option groups:', groupError);
+          set((current) => ({
+            optionGroupLoadingByProductId: {
+              ...current.optionGroupLoadingByProductId,
+              [productId]: false,
+            },
+          }));
           return;
         }
 
@@ -216,6 +236,10 @@ export const useStore = create<AppState>()(
           optionGroupsByProductId: {
             ...state.optionGroupsByProductId,
             [productId]: orderedGroups
+          },
+          optionGroupLoadingByProductId: {
+            ...state.optionGroupLoadingByProductId,
+            [productId]: false,
           }
         }));
       },
@@ -316,11 +340,13 @@ export const useStore = create<AppState>()(
           if (existing) {
             return {
               cart: state.cart.map((item) =>
-                item.cartKey === cartKey ? { ...item, quantity: item.quantity + 1 } : item
+                item.cartKey === cartKey
+                  ? { ...item, quantity: item.quantity + 1, optionsPrice: item.optionsPrice ?? 0 }
+                  : item
               ),
             };
           }
-          return { cart: [...state.cart, { ...product, quantity: 1, cartKey }] };
+          return { cart: [...state.cart, { ...product, quantity: 1, optionsPrice: 0, cartKey }] };
         }),
 
       addToCartWithDetails: (product, quantity, specialInstructions, selectedOptionIds) =>
@@ -442,7 +468,7 @@ export const useStore = create<AppState>()(
       // ── Reorder ─────────────────────────────────────────────
 
       reorderFromHistory: (items) => {
-        const { products } = get();
+        const { products, optionGroupsByProductId } = get();
         const added: CartItem[] = [];
         const skipped: string[] = [];
 
@@ -464,11 +490,19 @@ export const useStore = create<AppState>()(
               cartKey = `${product.id}:${optionsKey}`;
             }
 
+            const groups = optionGroupsByProductId[product.id] || [];
+            const allOptions = groups.flatMap(g => g.options || []);
+            const optionsPrice = sortedOptions.reduce((sum, optId) => {
+              const opt = allOptions.find(o => o.id === optId);
+              return sum + (opt?.price_delta || 0);
+            }, 0);
+
             added.push({
               ...product,
               quantity: item.quantity,
               specialInstructions: item.special_instructions || undefined,
               selectedOptionIds: sortedOptions,
+              optionsPrice,
               cartKey,
             });
           } else {
@@ -664,25 +698,16 @@ export const useStore = create<AppState>()(
       // ── Sauce Management ────────────────────────────────────
 
       fetchAllOptionGroups: async () => {
-        const { data: groups, error: gErr } = await insforge.database
+        const { data, error: gErr } = await insforge.database
           .from('product_option_groups')
-          .select('*')
+          .select('*, options:product_options(*)')
           .order('sort_order', { ascending: true });
 
-        if (gErr || !groups) return;
+        if (gErr || !data) return;
 
-        const groupIds = groups.map((g: OptionGroup) => g.id);
-        const { data: options, error: oErr } = await insforge.database
-          .from('product_options')
-          .select('*')
-          .in('group_id', groupIds)
-          .order('sort_order', { ascending: true });
-
-        if (oErr) return;
-
-        const enriched = groups.map((g: OptionGroup) => ({
-          ...g,
-          options: (options || []).filter((o: ProductOption) => o.group_id === g.id),
+        const enriched = data.map((group: any) => ({
+          ...group,
+          options: (group.options || []).sort((a: any, b: any) => a.sort_order - b.sort_order),
         }));
 
         set({ allOptionGroups: enriched });
@@ -705,6 +730,15 @@ export const useStore = create<AppState>()(
             ...g,
             options: g.options?.map(o => o.id === optionId ? { ...o, is_active: newActive } : o),
           })),
+          optionGroupsByProductId: Object.fromEntries(
+            Object.entries(get().optionGroupsByProductId).map(([productId, groups]) => [
+              productId,
+              groups.map(g => ({
+                ...g,
+                options: g.options?.map(o => o.id === optionId ? { ...o, is_active: newActive } : o),
+              })),
+            ])
+          ),
         });
 
         const { error } = await insforge.database
@@ -715,6 +749,7 @@ export const useStore = create<AppState>()(
         if (error) {
           console.error('Failed to toggle option:', error);
           get().fetchAllOptionGroups();
+          set({ optionGroupsByProductId: {}, optionGroupLoadingByProductId: {} });
         }
       },
 
@@ -735,6 +770,8 @@ export const useStore = create<AppState>()(
 
         if (error || !rows || rows.length === 0) {
           console.error('Failed to create option:', error);
+          get().fetchAllOptionGroups();
+          set({ optionGroupsByProductId: {}, optionGroupLoadingByProductId: {} });
           return null;
         }
 
@@ -742,6 +779,14 @@ export const useStore = create<AppState>()(
         set({
           allOptionGroups: get().allOptionGroups.map(g =>
             g.id === groupId ? { ...g, options: [...(g.options || []), newOption] } : g
+          ),
+          optionGroupsByProductId: Object.fromEntries(
+            Object.entries(get().optionGroupsByProductId).map(([productId, groups]) => [
+              productId,
+              groups.map(g =>
+                g.id === groupId ? { ...g, options: [...(g.options || []), newOption] } : g
+              ),
+            ])
           ),
         });
         return newOption;
@@ -754,6 +799,15 @@ export const useStore = create<AppState>()(
             ...g,
             options: g.options?.map(o => o.id === optionId ? { ...o, ...data } : o),
           })),
+          optionGroupsByProductId: Object.fromEntries(
+            Object.entries(get().optionGroupsByProductId).map(([productId, groups]) => [
+              productId,
+              groups.map(g => ({
+                ...g,
+                options: g.options?.map(o => o.id === optionId ? { ...o, ...data } : o),
+              })),
+            ])
+          ),
         });
 
         const { error } = await insforge.database
@@ -764,6 +818,7 @@ export const useStore = create<AppState>()(
         if (error) {
           console.error('Failed to update option:', error);
           get().fetchAllOptionGroups();
+          set({ optionGroupsByProductId: {}, optionGroupLoadingByProductId: {} });
         }
       },
 
@@ -774,6 +829,15 @@ export const useStore = create<AppState>()(
             ...g,
             options: g.options?.filter(o => o.id !== optionId),
           })),
+          optionGroupsByProductId: Object.fromEntries(
+            Object.entries(get().optionGroupsByProductId).map(([productId, groups]) => [
+              productId,
+              groups.map(g => ({
+                ...g,
+                options: g.options?.filter(o => o.id !== optionId),
+              })),
+            ])
+          ),
         });
 
         const { error } = await insforge.database
@@ -784,6 +848,7 @@ export const useStore = create<AppState>()(
         if (error) {
           console.error('Failed to delete option:', error);
           get().fetchAllOptionGroups();
+          set({ optionGroupsByProductId: {}, optionGroupLoadingByProductId: {} });
         }
       },
     }),

@@ -22,7 +22,7 @@ Project context:
   - UI components: src/app/components/
   - State/store: src/app/store/
   - InsForge client: src/lib/insforge.ts
-  - Order validation function: scripts/validate-order.js and src/app/functions/validate-order.js
+  - Order validation function: src/app/functions/place-order.js
 - Key database tables: categories, products, orders, order_items, global_settings, business_rules, admin_users.
 - App supports customer and admin flows (admin login and dashboard).
 - Arabic-first UX and RTL support are important.

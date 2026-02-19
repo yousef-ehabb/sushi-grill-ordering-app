@@ -1,22 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/useAuthStore';
-import { useStore } from '../../store/useStore';
+import { useStore, OrderItem } from '../../store/useStore';
 import { PhoneInput } from '../ui/PhoneInput';
 import { User, Mail, MapPin, Package, LogOut, Save, Loader2, ArrowLeft, CheckCircle2, Clock, Truck, Store, UtensilsCrossed, ChevronLeft } from 'lucide-react';
 import { toast } from 'sonner';
 import { motion } from 'motion/react';
 import { insforge } from '../../../lib/insforge';
 import { formatPhoneDisplay } from '../../../lib/phoneUtils';
-
-interface OrderItemLocal {
-    id: string;
-    product_id: string | null;
-    name_ar: string;
-    quantity: number;
-    unit_price: number;
-    special_instructions?: string;
-}
 
 interface Order {
     id: string;
@@ -25,7 +16,7 @@ interface Order {
     total: number;
     status: string;
     created_at: string;
-    items: OrderItemLocal[];
+    items: OrderItem[];
 }
 
 export const AccountPage: React.FC = () => {

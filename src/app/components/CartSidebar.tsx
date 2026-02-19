@@ -11,7 +11,17 @@ interface CartSidebarProps {
 }
 
 export const CartSidebar: React.FC<CartSidebarProps> = ({ isOpen, onClose, onCheckout }) => {
-  const { cart, updateQuantity, removeFromCart, orderType, categories, businessRules, optionGroupsByProductId, fetchProductOptionGroups } = useStore();
+  const {
+    cart,
+    updateQuantity,
+    removeFromCart,
+    orderType,
+    categories,
+    businessRules,
+    optionGroupsByProductId,
+    optionGroupLoadingByProductId,
+    fetchProductOptionGroups,
+  } = useStore();
 
   const total = cart.reduce((sum, item) => {
     const itemTotal = (item.price + (item.optionsPrice || 0)) * item.quantity;
@@ -20,12 +30,20 @@ export const CartSidebar: React.FC<CartSidebarProps> = ({ isOpen, onClose, onChe
 
   // Ensure option data is loaded for cart items that have selections
   useEffect(() => {
-    cart.forEach(item => {
-      if (item.selectedOptionIds?.length && !optionGroupsByProductId[item.id]) {
-        fetchProductOptionGroups(item.id);
+    const neededProductIds = new Set<string>();
+    for (const item of cart) {
+      if (
+        item.selectedOptionIds?.length &&
+        optionGroupsByProductId[item.id] === undefined &&
+        !optionGroupLoadingByProductId[item.id]
+      ) {
+        neededProductIds.add(item.id);
       }
+    }
+    neededProductIds.forEach((productId) => {
+      fetchProductOptionGroups(productId);
     });
-  }, [cart, optionGroupsByProductId, fetchProductOptionGroups]);
+  }, [cart, optionGroupsByProductId, optionGroupLoadingByProductId, fetchProductOptionGroups]);
 
   // Calculate minimum quantity violations
   const getMinQtyWarnings = () => {

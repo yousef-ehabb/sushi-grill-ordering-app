@@ -95,6 +95,12 @@ Rules:
 - Do not paste keys into Issues/PRs/docs.
 - If you suspect a key leak, rotate it in InsForge project settings immediately.
 
+Local MCP config (do not commit secrets):
+- Keep machine-specific MCP credentials in `opencode.local.json` or shell env vars.
+- Start from `opencode.example.json` and keep your working config untracked as `opencode.json`/`opencode.local.json`.
+- Use env var names `INSFORGE_API_KEY` and `INSFORGE_API_BASE_URL`.
+- Never commit `ik_...` project API keys to tracked files.
+
 ### 3) App-admin access (required for `/admin`)
 
 This app has its own admin system backed by the `admin_users` table.
