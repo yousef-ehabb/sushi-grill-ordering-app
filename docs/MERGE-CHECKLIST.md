@@ -85,7 +85,7 @@ git push origin feature/your-branch
 
 ### PR Title Format
 
-```
+```text
 [Feature|Fix|Refactor|Chore]: Short description
 ```
 
@@ -211,7 +211,7 @@ git push origin --delete feature/your-branch
 
 ## Quick Reference
 
-```
+```text
 Pre-Push    → Code clean + QA + integrity gate
 Git         → Rebase main + resolve + push + open PR
 PR          → Title format + description template + risk level

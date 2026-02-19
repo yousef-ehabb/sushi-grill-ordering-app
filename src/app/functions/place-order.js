@@ -56,7 +56,7 @@ export default async function (req) {
             const item = items[index];
             const quantity = Number(item?.quantity);
 
-            if (!item || item.product_id == null || item.category_id == null || !Number.isFinite(quantity) || quantity <= 0) {
+            if (!item || item.product_id == null || item.category_id == null || !Number.isInteger(quantity) || quantity <= 0) {
                 errors.push(`بيانات عنصر غير صالحة عند الفهرس ${index} (product_id/category_id/quantity)`);
                 continue;
             }
@@ -83,9 +83,20 @@ export default async function (req) {
             }), { status: 400, headers });
         }
 
+        const baseUrl = Deno.env.get('INSFORGE_BASE_URL');
+        const anonKey = Deno.env.get('ANON_KEY');
+        if (typeof baseUrl !== 'string' || baseUrl.trim() === '' || typeof anonKey !== 'string' || anonKey.trim() === '') {
+            console.error('place-order: missing INSFORGE_BASE_URL or ANON_KEY');
+            return new Response(JSON.stringify({
+                success: false,
+                error: 'Server configuration error (INSFORGE_BASE_URL/ANON_KEY)',
+                code: 'CONFIG_ERROR',
+            }), { status: 500, headers });
+        }
+
         const client = createClient({
-            baseUrl: Deno.env.get('INSFORGE_BASE_URL'),
-            anonKey: Deno.env.get('ANON_KEY'),
+            baseUrl,
+            anonKey,
         });
 
         const { data: settingsData, error: settingsErr } = await client.database
@@ -315,4 +326,5 @@ export default async function (req) {
             code: 'INTERNAL_ERROR',
         }), { status: 500, headers });
     }
-}
+}
+

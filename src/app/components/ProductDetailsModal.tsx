@@ -4,6 +4,7 @@ import { Product, useStore } from '../store/useStore';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { OptionGroupSelector } from './OptionGroupSelector';
+import { computeOptionsPrice } from '../utils/price';
 
 interface ProductDetailsModalProps {
     product: Product;
@@ -32,10 +33,7 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ produc
         }
     }, [isOpen, product.id, fetchProductOptionGroups]);
 
-    const optionsPrice = selectedOptions.reduce((total, optionId) => {
-        const option = groups.flatMap(g => g.options || []).find(o => o.id === optionId);
-        return total + (option?.price_delta || 0);
-    }, 0);
+    const optionsPrice = computeOptionsPrice(selectedOptions, groups);
 
     const totalPrice = (product.price + optionsPrice) * quantity;
 
@@ -213,4 +211,4 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ produc
             )}
         </AnimatePresence>
     );
-};
+};

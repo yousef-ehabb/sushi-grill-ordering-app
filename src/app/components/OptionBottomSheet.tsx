@@ -4,6 +4,7 @@ import { Product, useStore } from '../store/useStore';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { OptionGroupSelector } from './OptionGroupSelector';
+import { computeOptionsPrice } from '../utils/price';
 
 interface OptionBottomSheetProps {
     product: Product;
@@ -12,10 +13,11 @@ interface OptionBottomSheetProps {
 }
 
 export const OptionBottomSheet: React.FC<OptionBottomSheetProps> = ({ product, isOpen, onClose }) => {
-    const { addToCartWithDetails, fetchProductOptionGroups, optionGroupsByProductId } = useStore();
+    const { addToCartWithDetails, fetchProductOptionGroups, optionGroupsByProductId, optionGroupLoadingByProductId } = useStore();
     const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
 
     const groups = optionGroupsByProductId[product.id] || [];
+    const isLoadingOptionGroups = !!optionGroupLoadingByProductId[product.id];
 
     useEffect(() => {
         if (isOpen) {
@@ -24,13 +26,18 @@ export const OptionBottomSheet: React.FC<OptionBottomSheetProps> = ({ product, i
         }
     }, [isOpen, product.id, fetchProductOptionGroups]);
 
-    const optionsPrice = selectedOptions.reduce((total, optionId) => {
-        const option = groups.flatMap(g => g.options || []).find(o => o.id === optionId);
-        return total + (option?.price_delta || 0);
-    }, 0);
+    const optionsPrice = computeOptionsPrice(selectedOptions, groups);
     const totalPrice = product.price + optionsPrice;
 
     const handleConfirm = () => {
+        if (isLoadingOptionGroups || groups.length === 0) {
+            if (isLoadingOptionGroups) {
+                toast.error('جاري تحميل الخيارات...');
+            } else if (groups.length === 0) {
+                toast.error('لا توجد خيارات متاحة لهذا المنتج');
+            }
+            return;
+        }
         const optionsSnapshot = [...selectedOptions];
 
         for (const group of groups) {
@@ -112,7 +119,8 @@ export const OptionBottomSheet: React.FC<OptionBottomSheetProps> = ({ product, i
                         <div className="px-5 py-4 border-t border-slate-100 bg-slate-50/50">
                             <button
                                 onClick={handleConfirm}
-                                className="w-full py-3.5 rounded-xl font-bold flex items-center justify-center gap-3 bg-slate-900 text-white hover:bg-primary hover:shadow-lg hover:shadow-red-500/20 transition-all active:scale-[0.98]"
+                                disabled={isLoadingOptionGroups}
+                                className="w-full py-3.5 rounded-xl font-bold flex items-center justify-center gap-3 bg-slate-900 text-white hover:bg-primary hover:shadow-lg hover:shadow-red-500/20 transition-all active:scale-[0.98] disabled:opacity-60 disabled:pointer-events-none"
                             >
                                 <ShoppingBag className="w-5 h-5" />
                                 <span>أضف للسلة</span>
@@ -124,4 +132,4 @@ export const OptionBottomSheet: React.FC<OptionBottomSheetProps> = ({ product, i
             )}
         </AnimatePresence>
     );
-};
+};

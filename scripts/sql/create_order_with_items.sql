@@ -12,7 +12,7 @@ create or replace function public.create_order_with_items(
 )
 returns table (id uuid, created_at timestamptz)
 language plpgsql
-security definer
+security definer set search_path = ''
 as $$
 declare
   v_order_id uuid;
@@ -64,3 +64,10 @@ begin
   return query select v_order_id, v_created_at;
 end;
 $$;
+
+-- Restrict execution: only service_role may call this function directly.
+-- The edge function (place-order) runs as service_role and calls it via RPC.
+revoke execute on function public.create_order_with_items(text, text, text, uuid, text, numeric, jsonb) from public;
+revoke execute on function public.create_order_with_items(text, text, text, uuid, text, numeric, jsonb) from anon;
+revoke execute on function public.create_order_with_items(text, text, text, uuid, text, numeric, jsonb) from authenticated;
+grant  execute on function public.create_order_with_items(text, text, text, uuid, text, numeric, jsonb) to   service_role;

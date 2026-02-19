@@ -114,7 +114,8 @@ interface AppState {
   // Data Fetching
   fetchCategories: () => Promise<void>;
   fetchProducts: () => Promise<void>;
-  fetchProductOptionGroups: (productId: string) => Promise<void>;
+  fetchProductOptionGroups: (productId: string, forceReload?: boolean) => Promise<void>;
+  invalidateOptionGroups: (productId: string) => void;
   fetchAllOptionGroups: () => Promise<void>;
   fetchOrders: () => Promise<void>;
   fetchActiveOrder: () => Promise<void>;
@@ -195,9 +196,9 @@ export const useStore = create<AppState>()(
         set({ products: data || [] });
       },
 
-      fetchProductOptionGroups: async (productId: string) => {
+      fetchProductOptionGroups: async (productId: string, forceReload?: boolean) => {
         const state = get();
-        if (state.optionGroupsByProductId[productId] !== undefined || state.optionGroupLoadingByProductId[productId]) {
+        if (!forceReload && (state.optionGroupsByProductId[productId] !== undefined || state.optionGroupLoadingByProductId[productId])) {
           return;
         }
 
@@ -244,10 +245,18 @@ export const useStore = create<AppState>()(
         }));
       },
 
+      invalidateOptionGroups: (productId: string) => {
+        set((state) => {
+          const next = { ...state.optionGroupsByProductId };
+          delete next[productId];
+          return { optionGroupsByProductId: next };
+        });
+      },
+
       fetchOrders: async () => {
         const { data, error } = await insforge.database
           .from('orders')
-          .select()
+          .select('*, order_items(*)')
           .order('created_at', { ascending: false });
 
         if (error) {
@@ -255,27 +264,18 @@ export const useStore = create<AppState>()(
           return;
         }
 
-        const ordersWithItems: Order[] = await Promise.all(
-          (data || []).map(async (order: any) => {
-            const { data: items } = await insforge.database
-              .from('order_items')
-              .select()
-              .eq('order_id', order.id);
-
-            return {
-              ...order,
-              items: (items || []).map((item: any) => ({
-                id: item.id,
-                product_id: item.product_id,
-                name_ar: item.name_ar,
-                quantity: item.quantity,
-                unit_price: item.unit_price,
-                selected_option_ids: item.selected_option_ids,
-                special_instructions: item.special_instructions,
-              })),
-            };
-          })
-        );
+        const ordersWithItems: Order[] = (data || []).map((order: any) => ({
+          ...order,
+          items: (order.order_items || []).map((item: any) => ({
+            id: item.id,
+            product_id: item.product_id,
+            name_ar: item.name_ar,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            selected_option_ids: item.selected_option_ids,
+            special_instructions: item.special_instructions,
+          })),
+        }));
 
         set({ orders: ordersWithItems });
       },
@@ -369,8 +369,6 @@ export const useStore = create<AppState>()(
             const opt = allOptions.find(o => o.id === optId);
             return sum + (opt?.price_delta || 0);
           }, 0);
-
-          const itemBasePrice = product.price;
 
           // If no note, merge with existing same-option entry
           if (!trimmedNote) {
@@ -793,6 +791,8 @@ export const useStore = create<AppState>()(
       },
 
       updateOption: async (optionId, data) => {
+        const groupBefore = get().allOptionGroups.find(g => g.options?.some(o => o.id === optionId));
+        const productIdForInvalidation = groupBefore?.product_id;
         // Optimistic update
         set({
           allOptionGroups: get().allOptionGroups.map(g => ({
@@ -819,10 +819,14 @@ export const useStore = create<AppState>()(
           console.error('Failed to update option:', error);
           get().fetchAllOptionGroups();
           set({ optionGroupsByProductId: {}, optionGroupLoadingByProductId: {} });
+          throw error;
         }
+        if (productIdForInvalidation) get().invalidateOptionGroups(productIdForInvalidation);
       },
 
       deleteOption: async (optionId) => {
+        const groupBefore = get().allOptionGroups.find(g => g.options?.some(o => o.id === optionId));
+        const productIdForInvalidation = groupBefore?.product_id;
         // Optimistic delete
         set({
           allOptionGroups: get().allOptionGroups.map(g => ({
@@ -849,7 +853,9 @@ export const useStore = create<AppState>()(
           console.error('Failed to delete option:', error);
           get().fetchAllOptionGroups();
           set({ optionGroupsByProductId: {}, optionGroupLoadingByProductId: {} });
+          throw error;
         }
+        if (productIdForInvalidation) get().invalidateOptionGroups(productIdForInvalidation);
       },
     }),
     {

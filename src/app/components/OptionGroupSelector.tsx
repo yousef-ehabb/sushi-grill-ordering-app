@@ -44,7 +44,7 @@ export const OptionGroupSelector: React.FC<OptionGroupSelectorProps> = ({
       {groups.map((group) => {
         const count = getGroupSelectionCount(group);
         return (
-          <div key={group.id} className={variant === 'sheet' ? 'space-y-3' : 'space-y-3'}>
+          <div key={group.id} className="space-y-3">
             <div className="flex justify-between items-center">
               <div className="flex items-center gap-2">
                 <h4 className="text-sm font-bold text-slate-700">{group.name_ar}</h4>
