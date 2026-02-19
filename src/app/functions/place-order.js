@@ -89,7 +89,7 @@ export default async function (req) {
             console.error('place-order: missing INSFORGE_BASE_URL or ANON_KEY');
             return new Response(JSON.stringify({
                 success: false,
-                error: 'Server configuration error (INSFORGE_BASE_URL/ANON_KEY)',
+                error: 'Server configuration error',
                 code: 'CONFIG_ERROR',
             }), { status: 500, headers });
         }
@@ -219,6 +219,7 @@ export default async function (req) {
 
             const selectedOptions = item.selected_option_ids || [];
             const groups = groupsByProduct[item.product_id] || [];
+            let unitOptionsTotal = 0;
 
             for (const optId of selectedOptions) {
                 let found = false;
@@ -232,6 +233,7 @@ export default async function (req) {
                         isActive = opt.is_active;
                         priceDelta = opt.price_delta || 0;
                         if (isActive) {
+                            unitOptionsTotal += priceDelta;
                             computedTotal += priceDelta * item.quantity;
                         }
                         break;
@@ -257,16 +259,6 @@ export default async function (req) {
                     errors.push(`يمكنك اختيار ${group.max_select} صنف بحد أقصى من "${group.name_ar}"`);
                 }
             }
-
-            const unitOptionsTotal = selectedOptions.reduce((sum, optId) => {
-                for (const group of groups) {
-                    const opt = (group.product_options || []).find((o) => o.id === optId);
-                    if (opt && opt.is_active) {
-                        return sum + (opt.price_delta || 0);
-                    }
-                }
-                return sum;
-            }, 0);
 
             const unitPrice = product.price + unitOptionsTotal;
 

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { insforge } from '../../lib/insforge';
+import { computeOptionsPrice } from '../utils/price';
 
 export type Category = {
   id: string;
@@ -364,11 +365,7 @@ export const useStore = create<AppState>()(
           const optionsKey = sortedOptions.length > 0 ? sortedOptions.join(',') : '';
 
           const groups = state.optionGroupsByProductId[product.id] || [];
-          const allOptions = groups.flatMap(g => g.options || []);
-          const optionsPrice = sortedOptions.reduce((sum, optId) => {
-            const opt = allOptions.find(o => o.id === optId);
-            return sum + (opt?.price_delta || 0);
-          }, 0);
+          const optionsPrice = computeOptionsPrice(sortedOptions, groups);
 
           // If no note, merge with existing same-option entry
           if (!trimmedNote) {
@@ -443,7 +440,7 @@ export const useStore = create<AppState>()(
 
           if (response.error) {
             const err = response.error as any;
-            const errorMsg = err.errors?.join('\n') || err.error || err.message || 'فشل إنشاء الطلب';
+            const errorMsg = err.message || err.error || (typeof err === 'object' ? JSON.stringify(err) : String(err)) || 'فشل إنشاء الطلب';
             throw new Error(errorMsg);
           }
 
@@ -489,11 +486,7 @@ export const useStore = create<AppState>()(
             }
 
             const groups = optionGroupsByProductId[product.id] || [];
-            const allOptions = groups.flatMap(g => g.options || []);
-            const optionsPrice = sortedOptions.reduce((sum, optId) => {
-              const opt = allOptions.find(o => o.id === optId);
-              return sum + (opt?.price_delta || 0);
-            }, 0);
+            const optionsPrice = computeOptionsPrice(sortedOptions, groups);
 
             added.push({
               ...product,

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore, OrderStatus, Product } from '../store/useStore';
 import { useAuthStore } from '../store/useAuthStore';
@@ -46,6 +46,7 @@ export const AdminView: React.FC = () => {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'orders' | 'menu' | 'controls'>('orders');
   const [optionNames, setOptionNames] = useState<Map<string, string>>(new Map());
+  const optionNamesRef = useRef<Map<string, string>>(new Map());
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -91,6 +92,11 @@ export const AdminView: React.FC = () => {
     setLocalMinQty(map);
   }, [businessRules]);
 
+  // Keep ref in sync with state so effect can read without depending on optionNames
+  useEffect(() => {
+    optionNamesRef.current = optionNames;
+  }, [optionNames]);
+
   // Resolve sauce names for all orders (only fetch IDs not already cached)
   useEffect(() => {
     const fetchSauceNames = async () => {
@@ -100,7 +106,7 @@ export const AdminView: React.FC = () => {
         )
       ));
       if (allIds.length === 0) return;
-      const missingIds = allIds.filter(id => !optionNames.has(id));
+      const missingIds = allIds.filter(id => !optionNamesRef.current.has(id));
       if (missingIds.length === 0) return;
       const newMap = await resolveAllOptionNames([missingIds]);
       setOptionNames(prev => new Map([...prev, ...newMap]));
@@ -108,7 +114,7 @@ export const AdminView: React.FC = () => {
     if (orders.length > 0) {
       fetchSauceNames();
     }
-  }, [orders, optionNames]);
+  }, [orders]);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -807,14 +813,14 @@ export const AdminView: React.FC = () => {
                                       setEditSaucePrice(option.price_delta);
                                     }}
                                     className="p-2 hover:bg-slate-100 rounded-lg transition-all"
-                                    title="طھط¹ط¯ظٹظ„"
+                                    title="تعديل"
                                   >
                                     <Pencil className="w-3.5 h-3.5 text-slate-400" />
                                   </button>
                                   <button
                                     onClick={() => setDeletingId(option.id)}
                                     className="p-2 hover:bg-red-50 rounded-lg transition-all"
-                                    title="ط­ط°ظپ"
+                                    title="حذف"
                                   >
                                     <Trash2 className="w-3.5 h-3.5 text-red-400" />
                                   </button>
@@ -836,7 +842,7 @@ export const AdminView: React.FC = () => {
                               [group.id]: { ...(prev[group.id] || { name: '', price: 0 }), name: e.target.value },
                             }))}
                             className="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm text-right bg-white focus:outline-none focus:ring-2 focus:ring-amber-300"
-                            placeholder="ط§ط³ظ… ط§ظ„طµظˆطµ ط§ظ„ط¬ط¯ظٹط¯..."
+                            placeholder="اسم الصوص الجديد..."
                           />
                           <input
                             type="number"
@@ -846,7 +852,7 @@ export const AdminView: React.FC = () => {
                               [group.id]: { ...(prev[group.id] || { name: '', price: 0 }), price: Number(e.target.value) },
                             }))}
                             className="w-20 border border-slate-200 rounded-lg px-3 py-2 text-sm text-right bg-white focus:outline-none focus:ring-2 focus:ring-amber-300"
-                            placeholder="ط§ظ„ط³ط¹ط±"
+                            placeholder="السعر"
                             min={0}
                           />
                           <button
@@ -859,9 +865,9 @@ export const AdminView: React.FC = () => {
                                   ...prev,
                                   [group.id]: { name: '', price: 0 },
                                 }));
-                                toast.success(`طھظ… ط¥ط¶ط§ظپط© "${result.name_ar}"`);
+                                toast.success(`تم إضافة "${result.name_ar}"`);
                               } else {
-                                toast.error('ظپط´ظ„ ظپظٹ ط§ظ„ط¥ط¶ط§ظپط©');
+                                toast.error('فشل في الإضافة');
                               }
                             }}
                             className="bg-amber-500 text-white p-2 rounded-lg hover:bg-amber-600 transition-all shadow-sm"
