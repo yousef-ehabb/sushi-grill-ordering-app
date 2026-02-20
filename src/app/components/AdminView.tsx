@@ -644,6 +644,7 @@ export const AdminView: React.FC = () => {
           <>
             {/* Backdrop */}
             <motion.div
+              key="sauce-backdrop"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -653,6 +654,7 @@ export const AdminView: React.FC = () => {
 
             {/* Panel */}
             <motion.div
+              key="sauce-panel"
               initial={{ x: '100%' }}
               animate={{ x: 0 }}
               exit={{ x: '100%' }}
@@ -783,9 +785,13 @@ export const AdminView: React.FC = () => {
                                 <div className="flex items-center gap-3">
                                   {/* Toggle Switch */}
                                   <button
-                                    onClick={() => {
-                                      toggleOptionActive(option.id);
-                                      toast.success(option.is_active ? `تم إيقاف "${option.name_ar}"` : `تم تفعيل "${option.name_ar}"`);
+                                    onClick={async () => {
+                                      try {
+                                        await toggleOptionActive(option.id);
+                                        toast.success(option.is_active ? `تم إيقاف "${option.name_ar}"` : `تم تفعيل "${option.name_ar}"`);
+                                      } catch {
+                                        toast.error('حدث خطأ أثناء تغيير الحالة');
+                                      }
                                     }}
                                     className="transition-all"
                                   >

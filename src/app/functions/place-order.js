@@ -13,8 +13,22 @@ export default async function (req) {
 
     const headers = { ...corsHeaders, 'Content-Type': 'application/json' };
 
+    let body;
     try {
-        const body = await req.json();
+        body = await req.json();
+    } catch (parseErr) {
+        const isJsonError = parseErr instanceof SyntaxError || (parseErr?.name === 'SyntaxError');
+        if (isJsonError) {
+            return new Response(JSON.stringify({
+                success: false,
+                error: 'طلب غير صالح (JSON غير صحيح)',
+                code: 'INVALID_JSON',
+            }), { status: 400, headers });
+        }
+        throw parseErr;
+    }
+
+    try {
         const {
             customer_name,
             customer_phone,

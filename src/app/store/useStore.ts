@@ -228,10 +228,12 @@ export const useStore = create<AppState>()(
           return;
         }
 
-        // Also order the options within groups by sort_order
+        // Order options by sort_order and keep only active options in client state
         const orderedGroups = (groups || []).map((group: any) => ({
           ...group,
-          options: (group.options || []).sort((a: any, b: any) => a.sort_order - b.sort_order)
+          options: (group.options || [])
+            .filter((o: any) => o.is_active === true)
+            .sort((a: any, b: any) => a.sort_order - b.sort_order)
         }));
 
         set((state) => ({
@@ -486,7 +488,9 @@ export const useStore = create<AppState>()(
             }
 
             const groups = optionGroupsByProductId[product.id] || [];
-            const optionsPrice = computeOptionsPrice(sortedOptions, groups);
+            const optionsPrice = groups.length === 0 && item.unit_price != null
+              ? Math.max(0, item.unit_price - (product.price ?? 0))
+              : computeOptionsPrice(sortedOptions, groups);
 
             added.push({
               ...product,
@@ -705,31 +709,30 @@ export const useStore = create<AppState>()(
       },
 
       toggleOptionActive: async (optionId) => {
-        const allGroups = get().allOptionGroups;
-        let currentActive = true;
-
-        for (const g of allGroups) {
-          const opt = g.options?.find(o => o.id === optionId);
-          if (opt) { currentActive = opt.is_active; break; }
-        }
-
-        const newActive = !currentActive;
-
-        // Optimistic update
-        set({
-          allOptionGroups: allGroups.map(g => ({
-            ...g,
-            options: g.options?.map(o => o.id === optionId ? { ...o, is_active: newActive } : o),
-          })),
-          optionGroupsByProductId: Object.fromEntries(
-            Object.entries(get().optionGroupsByProductId).map(([productId, groups]) => [
-              productId,
-              groups.map(g => ({
-                ...g,
-                options: g.options?.map(o => o.id === optionId ? { ...o, is_active: newActive } : o),
-              })),
-            ])
-          ),
+        let newActive: boolean;
+        set((state) => {
+          const allGroups = state.allOptionGroups;
+          let currentActive = true;
+          for (const g of allGroups) {
+            const opt = g.options?.find(o => o.id === optionId);
+            if (opt) { currentActive = opt.is_active; break; }
+          }
+          newActive = !currentActive;
+          return {
+            allOptionGroups: allGroups.map(g => ({
+              ...g,
+              options: g.options?.map(o => o.id === optionId ? { ...o, is_active: newActive } : o),
+            })),
+            optionGroupsByProductId: Object.fromEntries(
+              Object.entries(state.optionGroupsByProductId).map(([productId, groups]) => [
+                productId,
+                groups.map(g => ({
+                  ...g,
+                  options: g.options?.map(o => o.id === optionId ? { ...o, is_active: newActive } : o),
+                })),
+              ])
+            ),
+          };
         });
 
         const { error } = await insforge.database
@@ -741,6 +744,7 @@ export const useStore = create<AppState>()(
           console.error('Failed to toggle option:', error);
           get().fetchAllOptionGroups();
           set({ optionGroupsByProductId: {}, optionGroupLoadingByProductId: {} });
+          throw error;
         }
       },
 
@@ -767,19 +771,19 @@ export const useStore = create<AppState>()(
         }
 
         const newOption = rows[0] as ProductOption;
-        set({
-          allOptionGroups: get().allOptionGroups.map(g =>
+        set((state) => ({
+          allOptionGroups: state.allOptionGroups.map(g =>
             g.id === groupId ? { ...g, options: [...(g.options || []), newOption] } : g
           ),
           optionGroupsByProductId: Object.fromEntries(
-            Object.entries(get().optionGroupsByProductId).map(([productId, groups]) => [
+            Object.entries(state.optionGroupsByProductId).map(([productId, groups]) => [
               productId,
               groups.map(g =>
                 g.id === groupId ? { ...g, options: [...(g.options || []), newOption] } : g
               ),
             ])
           ),
-        });
+        }));
         return newOption;
       },
 
@@ -787,13 +791,13 @@ export const useStore = create<AppState>()(
         const groupBefore = get().allOptionGroups.find(g => g.options?.some(o => o.id === optionId));
         const productIdForInvalidation = groupBefore?.product_id;
         // Optimistic update
-        set({
-          allOptionGroups: get().allOptionGroups.map(g => ({
+        set((state) => ({
+          allOptionGroups: state.allOptionGroups.map(g => ({
             ...g,
             options: g.options?.map(o => o.id === optionId ? { ...o, ...data } : o),
           })),
           optionGroupsByProductId: Object.fromEntries(
-            Object.entries(get().optionGroupsByProductId).map(([productId, groups]) => [
+            Object.entries(state.optionGroupsByProductId).map(([productId, groups]) => [
               productId,
               groups.map(g => ({
                 ...g,
@@ -801,7 +805,7 @@ export const useStore = create<AppState>()(
               })),
             ])
           ),
-        });
+        }));
 
         const { error } = await insforge.database
           .from('product_options')
@@ -821,13 +825,13 @@ export const useStore = create<AppState>()(
         const groupBefore = get().allOptionGroups.find(g => g.options?.some(o => o.id === optionId));
         const productIdForInvalidation = groupBefore?.product_id;
         // Optimistic delete
-        set({
-          allOptionGroups: get().allOptionGroups.map(g => ({
+        set((state) => ({
+          allOptionGroups: state.allOptionGroups.map(g => ({
             ...g,
             options: g.options?.filter(o => o.id !== optionId),
           })),
           optionGroupsByProductId: Object.fromEntries(
-            Object.entries(get().optionGroupsByProductId).map(([productId, groups]) => [
+            Object.entries(state.optionGroupsByProductId).map(([productId, groups]) => [
               productId,
               groups.map(g => ({
                 ...g,
@@ -835,7 +839,7 @@ export const useStore = create<AppState>()(
               })),
             ])
           ),
-        });
+        }));
 
         const { error } = await insforge.database
           .from('product_options')
