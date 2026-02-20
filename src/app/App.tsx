@@ -6,6 +6,8 @@ import { AdminLogin } from './components/AdminLogin';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { CartSidebar } from './components/CartSidebar';
 import { CheckoutModal } from './components/CheckoutModal';
+import { AbandonedCartBanner } from './components/AbandonedCartBanner';
+import { useAbandonedCart } from './hooks/useAbandonedCart';
 import { RegisterPage } from './components/auth/RegisterPage';
 import { LoginPage } from './components/auth/LoginPage';
 import { AccountPage } from './components/auth/AccountPage';
@@ -34,6 +36,7 @@ const CustomerLayout: React.FC = () => {
     checkAbandonedCart,
   } = useStore();
   const { isAuthenticated, user, initSession } = useAuthStore();
+  const { isAbandoned, dismissAbandoned } = useAbandonedCart();
   const isOpen = globalSettings?.is_website_open ?? true;
   const [isScrolled, setIsScrolled] = useState(false);
 
@@ -381,6 +384,13 @@ const CustomerLayout: React.FC = () => {
           </div>
         </div>
       </footer>
+
+      {/* Abandoned Cart Banner */}
+      <AbandonedCartBanner
+        isVisible={isAbandoned}
+        onOpenCart={() => setIsCartOpen(true)}
+        onDismiss={dismissAbandoned}
+      />
 
       {/* Modals */}
       <CartSidebar
