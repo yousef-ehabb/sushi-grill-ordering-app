@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { insforge } from '../../lib/insforge';
+import { computeOptionsPrice } from '../utils/price';
 
 export type Category = {
   id: string;
@@ -24,9 +25,33 @@ export type Product = {
   ingredients_ar?: string[];
 };
 
+export type ProductOption = {
+  id: string;
+  group_id: string;
+  key?: string;
+  name_ar: string;
+  price_delta: number;
+  is_active: boolean;
+  sort_order: number;
+};
+
+export type OptionGroup = {
+  id: string;
+  product_id: string;
+  key: string;
+  name_ar: string;
+  min_select: number;
+  max_select: number;
+  is_active: boolean;
+  sort_order: number;
+  options?: ProductOption[];
+};
+
 export type CartItem = Product & {
   quantity: number;
   specialInstructions?: string;
+  selectedOptionIds?: string[];
+  optionsPrice: number;
   cartKey: string;
 };
 
@@ -39,7 +64,7 @@ export type Order = {
   address?: string;
   user_id?: string;
   type: 'pickup' | 'delivery';
-  items: CartItem[];
+  items: OrderItem[];
   total: number;
   status: OrderStatus;
   created_at: string;
@@ -52,6 +77,7 @@ export type OrderItem = {
   quantity: number;
   unit_price: number;
   special_instructions?: string;
+  selected_option_ids?: string[];
 };
 
 export type GlobalSettings = {
@@ -70,6 +96,9 @@ export type BusinessRule = {
 interface AppState {
   categories: Category[];
   products: Product[];
+  optionGroupsByProductId: Record<string, OptionGroup[]>;
+  optionGroupLoadingByProductId: Record<string, boolean>;
+  allOptionGroups: OptionGroup[];
   cart: CartItem[];
   orders: Order[];
   orderType: 'pickup' | 'delivery' | null;
@@ -86,6 +115,9 @@ interface AppState {
   // Data Fetching
   fetchCategories: () => Promise<void>;
   fetchProducts: () => Promise<void>;
+  fetchProductOptionGroups: (productId: string, forceReload?: boolean) => Promise<void>;
+  invalidateOptionGroups: (productId: string) => void;
+  fetchAllOptionGroups: () => Promise<void>;
   fetchOrders: () => Promise<void>;
   fetchActiveOrder: () => Promise<void>;
   fetchGlobalSettings: () => Promise<void>;
@@ -94,7 +126,7 @@ interface AppState {
   // Cart Actions
   setOrderType: (type: 'pickup' | 'delivery') => void;
   addToCart: (product: Product) => void;
-  addToCartWithDetails: (product: Product, quantity: number, specialInstructions?: string) => void;
+  addToCartWithDetails: (product: Product, quantity: number, specialInstructions?: string, selectedOptionIds?: string[]) => void;
   removeFromCart: (cartKey: string) => void;
   updateQuantity: (cartKey: string, delta: number) => void;
   clearCart: () => void;
@@ -109,6 +141,12 @@ interface AppState {
   updateProduct: (id: string, data: Partial<Product>) => Promise<void>;
   uploadProductImage: (productId: string, file: File) => Promise<string | null>;
 
+  // Sauce Management
+  toggleOptionActive: (optionId: string) => Promise<void>;
+  createOption: (groupId: string, data: { name_ar: string; price_delta: number }) => Promise<ProductOption | null>;
+  updateOption: (optionId: string, data: Partial<Pick<ProductOption, 'name_ar' | 'price_delta'>>) => Promise<void>;
+  deleteOption: (optionId: string) => Promise<void>;
+
   // Operational Control Actions
   updateGlobalSettings: (data: Partial<Pick<GlobalSettings, 'is_website_open' | 'closed_message'>>) => Promise<void>;
   toggleCategoryActive: (categoryId: string) => Promise<void>;
@@ -120,6 +158,9 @@ export const useStore = create<AppState>()(
     (set, get) => ({
       categories: [],
       products: [],
+      optionGroupsByProductId: {},
+      optionGroupLoadingByProductId: {},
+      allOptionGroups: [],
       cart: [],
       orders: [],
       orderType: null,
@@ -156,10 +197,69 @@ export const useStore = create<AppState>()(
         set({ products: data || [] });
       },
 
+      fetchProductOptionGroups: async (productId: string, forceReload?: boolean) => {
+        const state = get();
+        if (!forceReload && (state.optionGroupsByProductId[productId] !== undefined || state.optionGroupLoadingByProductId[productId])) {
+          return;
+        }
+
+        set((current) => ({
+          optionGroupLoadingByProductId: {
+            ...current.optionGroupLoadingByProductId,
+            [productId]: true,
+          },
+        }));
+
+        const { data: groups, error: groupError } = await insforge.database
+          .from('product_option_groups')
+          .select('*, options:product_options(*)')
+          .eq('product_id', productId)
+          .eq('is_active', true)
+          .order('sort_order', { ascending: true });
+
+        if (groupError) {
+          console.error('Failed to fetch option groups:', groupError);
+          set((current) => ({
+            optionGroupLoadingByProductId: {
+              ...current.optionGroupLoadingByProductId,
+              [productId]: false,
+            },
+          }));
+          return;
+        }
+
+        // Order options by sort_order and keep only active options in client state
+        const orderedGroups = (groups || []).map((group: any) => ({
+          ...group,
+          options: (group.options || [])
+            .filter((o: any) => o.is_active === true)
+            .sort((a: any, b: any) => a.sort_order - b.sort_order)
+        }));
+
+        set((state) => ({
+          optionGroupsByProductId: {
+            ...state.optionGroupsByProductId,
+            [productId]: orderedGroups
+          },
+          optionGroupLoadingByProductId: {
+            ...state.optionGroupLoadingByProductId,
+            [productId]: false,
+          }
+        }));
+      },
+
+      invalidateOptionGroups: (productId: string) => {
+        set((state) => {
+          const next = { ...state.optionGroupsByProductId };
+          delete next[productId];
+          return { optionGroupsByProductId: next };
+        });
+      },
+
       fetchOrders: async () => {
         const { data, error } = await insforge.database
           .from('orders')
-          .select()
+          .select('*, order_items(*)')
           .order('created_at', { ascending: false });
 
         if (error) {
@@ -167,29 +267,18 @@ export const useStore = create<AppState>()(
           return;
         }
 
-        const ordersWithItems: Order[] = await Promise.all(
-          (data || []).map(async (order: any) => {
-            const { data: items } = await insforge.database
-              .from('order_items')
-              .select()
-              .eq('order_id', order.id);
-
-            return {
-              ...order,
-              items: (items || []).map((item: any) => ({
-                id: item.product_id || item.id,
-                name_ar: item.name_ar,
-                quantity: item.quantity,
-                price: item.unit_price,
-                name_en: '',
-                description_ar: '',
-                category_id: '',
-                image_url: '',
-                is_available: true,
-              })),
-            };
-          })
-        );
+        const ordersWithItems: Order[] = (data || []).map((order: any) => ({
+          ...order,
+          items: (order.order_items || []).map((item: any) => ({
+            id: item.id,
+            product_id: item.product_id,
+            name_ar: item.name_ar,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            selected_option_ids: item.selected_option_ids,
+            special_instructions: item.special_instructions,
+          })),
+        }));
 
         set({ orders: ordersWithItems });
       },
@@ -254,14 +343,16 @@ export const useStore = create<AppState>()(
           if (existing) {
             return {
               cart: state.cart.map((item) =>
-                item.cartKey === cartKey ? { ...item, quantity: item.quantity + 1 } : item
+                item.cartKey === cartKey
+                  ? { ...item, quantity: item.quantity + 1, optionsPrice: item.optionsPrice ?? 0 }
+                  : item
               ),
             };
           }
-          return { cart: [...state.cart, { ...product, quantity: 1, cartKey }] };
+          return { cart: [...state.cart, { ...product, quantity: 1, optionsPrice: 0, cartKey }] };
         }),
 
-      addToCartWithDetails: (product, quantity, specialInstructions) =>
+      addToCartWithDetails: (product, quantity, specialInstructions, selectedOptionIds) =>
         set((state) => {
           // Guard: website closed
           if (state.globalSettings && !state.globalSettings.is_website_open) return state;
@@ -272,10 +363,15 @@ export const useStore = create<AppState>()(
           if (!product.is_available) return state;
 
           const trimmedNote = specialInstructions?.trim().slice(0, 200) || undefined;
+          const sortedOptions = selectedOptionIds?.slice().sort() || [];
+          const optionsKey = sortedOptions.length > 0 ? sortedOptions.join(',') : '';
 
-          // If no note, merge with existing no-note entry
+          const groups = state.optionGroupsByProductId[product.id] || [];
+          const optionsPrice = computeOptionsPrice(sortedOptions, groups);
+
+          // If no note, merge with existing same-option entry
           if (!trimmedNote) {
-            const cartKey = product.id;
+            const cartKey = optionsKey ? `${product.id}:${optionsKey}` : product.id;
             const existing = state.cart.find((item) => item.cartKey === cartKey);
             if (existing) {
               return {
@@ -284,13 +380,16 @@ export const useStore = create<AppState>()(
                 ),
               };
             }
-            return { cart: [...state.cart, { ...product, quantity, cartKey }] };
+            return { cart: [...state.cart, { ...product, quantity, selectedOptionIds: sortedOptions, optionsPrice, cartKey }] };
           }
 
-          // With note → always a new cart entry with unique key
-          const cartKey = `${product.id}-${Date.now()}`;
+          // With note → always a new cart entry
+          const cartKey = optionsKey
+            ? `${product.id}:${optionsKey}-${Date.now()}`
+            : `${product.id}-${Date.now()}`;
+
           return {
-            cart: [...state.cart, { ...product, quantity, specialInstructions: trimmedNote, cartKey }],
+            cart: [...state.cart, { ...product, quantity, specialInstructions: trimmedNote, selectedOptionIds: sortedOptions, optionsPrice, cartKey }],
           };
         }),
 
@@ -316,73 +415,46 @@ export const useStore = create<AppState>()(
         set({ loading: true, error: null });
 
         try {
-          // 1. Server-side validation via Edge Function
-          const validationPayload = {
+          const clientComputedTotal = orderData.items.reduce((sum, item) => {
+            const itemTotal = (item.price + (item.optionsPrice || 0)) * item.quantity;
+            return sum + itemTotal;
+          }, 0);
+
+          const orderPayload = {
+            customer_name: orderData.customer_name,
+            customer_phone: orderData.customer_phone,
+            address: orderData.address,
+            user_id: orderData.user_id,
+            type: orderData.type,
             items: orderData.items.map(item => ({
               product_id: item.id,
               category_id: item.category_id,
               quantity: item.quantity,
+              selected_option_ids: item.selectedOptionIds,
+              special_instructions: item.specialInstructions,
             })),
+            client_total: clientComputedTotal,
           };
 
-          const validationResponse = await insforge.functions.invoke('validate-order', {
-            body: validationPayload,
+          const response = await insforge.functions.invoke('place-order', {
+            body: orderPayload,
           });
 
-          if (validationResponse.error) {
-            // SDK error (network failure, unexpected status code)
-            const err = validationResponse.error as any;
-            const errorMsg = err.errors?.join('\n') || err.error || err.message || 'فشل التحقق من الطلب';
+          if (response.error) {
+            const err = response.error as any;
+            const errorMsg = err.message || err.error || (typeof err === 'object' ? JSON.stringify(err) : String(err)) || 'فشل إنشاء الطلب';
             throw new Error(errorMsg);
           }
 
-          if (validationResponse.data && !validationResponse.data.valid) {
-            // Successful response but validation failed
-            const errorData = validationResponse.data;
-            const errorMsg = errorData.errors?.join('\n') || errorData.error || 'فشل التحقق من الطلب';
+          const result = response.data;
+
+          if (!result || !result.success) {
+            const errorMsg = result?.errors?.join('\n') || result?.error || 'فشل إنشاء الطلب';
             throw new Error(errorMsg);
-          }
-
-          // 2. Insert the order
-          const { data: orderResult, error: orderError } = await insforge.database
-            .from('orders')
-            .insert({
-              customer_name: orderData.customer_name,
-              customer_phone: orderData.customer_phone,
-              address: orderData.address || null,
-              user_id: orderData.user_id || null,
-              type: orderData.type,
-              total: orderData.total,
-              status: 'new',
-            })
-            .select()
-
-          if (orderError || !orderResult || orderResult.length === 0) {
-            throw new Error(orderError?.message || 'Failed to create order');
-          }
-
-          const newOrder = orderResult[0];
-
-          // 3. Insert order items
-          const itemsToInsert = orderData.items.map((item) => ({
-            order_id: newOrder.id,
-            product_id: item.id,
-            name_ar: item.name_ar,
-            quantity: item.quantity,
-            unit_price: item.price,
-            special_instructions: item.specialInstructions || null,
-          }));
-
-          const { error: itemsError } = await insforge.database
-            .from('order_items')
-            .insert(itemsToInsert);
-
-          if (itemsError) {
-            throw new Error(itemsError?.message || 'Failed to save order items');
           }
 
           set({ loading: false });
-          return newOrder.id;
+          return result.order_id;
         } catch (err: any) {
           set({ loading: false, error: err.message });
           console.error('Order submission failed:', err);
@@ -393,7 +465,7 @@ export const useStore = create<AppState>()(
       // ── Reorder ─────────────────────────────────────────────
 
       reorderFromHistory: (items) => {
-        const { products } = get();
+        const { products, optionGroupsByProductId } = get();
         const added: CartItem[] = [];
         const skipped: string[] = [];
 
@@ -403,20 +475,37 @@ export const useStore = create<AppState>()(
             : null;
 
           if (product && product.is_available) {
+            const sortedOptions = item.selected_option_ids?.slice().sort() || [];
+            const optionsKey = sortedOptions.length > 0 ? sortedOptions.join(',') : '';
+
+            let cartKey = product.id;
+            if (item.special_instructions) {
+              cartKey = optionsKey
+                ? `${product.id}:${optionsKey}-${Date.now()}-${added.length}`
+                : `${product.id}-${Date.now()}-${added.length}`;
+            } else if (optionsKey) {
+              cartKey = `${product.id}:${optionsKey}`;
+            }
+
+            const groups = optionGroupsByProductId[product.id] || [];
+            const optionsPrice = groups.length === 0 && item.unit_price != null
+              ? Math.max(0, item.unit_price - (product.price ?? 0))
+              : computeOptionsPrice(sortedOptions, groups);
+
             added.push({
               ...product,
               quantity: item.quantity,
               specialInstructions: item.special_instructions || undefined,
-              cartKey: item.special_instructions
-                ? `${product.id}-${Date.now()}-${added.length}`
-                : product.id,
+              selectedOptionIds: sortedOptions,
+              optionsPrice,
+              cartKey,
             });
           } else {
             skipped.push(item.name_ar);
           }
         }
 
-        // Merge items with same cartKey (no special instructions)
+        // Merge items with same cartKey
         const merged = new Map<string, CartItem>();
         for (const cartItem of added) {
           const existing = merged.get(cartItem.cartKey);
@@ -599,6 +688,171 @@ export const useStore = create<AppState>()(
             }));
           }
         }
+      },
+
+      // ── Sauce Management ────────────────────────────────────
+
+      fetchAllOptionGroups: async () => {
+        const { data, error: gErr } = await insforge.database
+          .from('product_option_groups')
+          .select('*, options:product_options(*)')
+          .order('sort_order', { ascending: true });
+
+        if (gErr || !data) return;
+
+        const enriched = data.map((group: any) => ({
+          ...group,
+          options: (group.options || []).sort((a: any, b: any) => a.sort_order - b.sort_order),
+        }));
+
+        set({ allOptionGroups: enriched });
+      },
+
+      toggleOptionActive: async (optionId) => {
+        let newActive: boolean;
+        set((state) => {
+          const allGroups = state.allOptionGroups;
+          let currentActive = true;
+          for (const g of allGroups) {
+            const opt = g.options?.find(o => o.id === optionId);
+            if (opt) { currentActive = opt.is_active; break; }
+          }
+          newActive = !currentActive;
+          return {
+            allOptionGroups: allGroups.map(g => ({
+              ...g,
+              options: g.options?.map(o => o.id === optionId ? { ...o, is_active: newActive } : o),
+            })),
+            optionGroupsByProductId: Object.fromEntries(
+              Object.entries(state.optionGroupsByProductId).map(([productId, groups]) => [
+                productId,
+                groups.map(g => ({
+                  ...g,
+                  options: g.options?.map(o => o.id === optionId ? { ...o, is_active: newActive } : o),
+                })),
+              ])
+            ),
+          };
+        });
+
+        const { error } = await insforge.database
+          .from('product_options')
+          .update({ is_active: newActive })
+          .eq('id', optionId);
+
+        if (error) {
+          console.error('Failed to toggle option:', error);
+          get().fetchAllOptionGroups();
+          set({ optionGroupsByProductId: {}, optionGroupLoadingByProductId: {} });
+          throw error;
+        }
+      },
+
+      createOption: async (groupId, data) => {
+        const group = get().allOptionGroups.find(g => g.id === groupId);
+        const maxSort = Math.max(0, ...(group?.options?.map(o => o.sort_order) || []));
+
+        const { data: rows, error } = await insforge.database
+          .from('product_options')
+          .insert({
+            group_id: groupId,
+            name_ar: data.name_ar,
+            price_delta: data.price_delta,
+            is_active: true,
+            sort_order: maxSort + 1,
+          })
+          .select();
+
+        if (error || !rows || rows.length === 0) {
+          console.error('Failed to create option:', error);
+          get().fetchAllOptionGroups();
+          set({ optionGroupsByProductId: {}, optionGroupLoadingByProductId: {} });
+          return null;
+        }
+
+        const newOption = rows[0] as ProductOption;
+        set((state) => ({
+          allOptionGroups: state.allOptionGroups.map(g =>
+            g.id === groupId ? { ...g, options: [...(g.options || []), newOption] } : g
+          ),
+          optionGroupsByProductId: Object.fromEntries(
+            Object.entries(state.optionGroupsByProductId).map(([productId, groups]) => [
+              productId,
+              groups.map(g =>
+                g.id === groupId ? { ...g, options: [...(g.options || []), newOption] } : g
+              ),
+            ])
+          ),
+        }));
+        return newOption;
+      },
+
+      updateOption: async (optionId, data) => {
+        const groupBefore = get().allOptionGroups.find(g => g.options?.some(o => o.id === optionId));
+        const productIdForInvalidation = groupBefore?.product_id;
+        // Optimistic update
+        set((state) => ({
+          allOptionGroups: state.allOptionGroups.map(g => ({
+            ...g,
+            options: g.options?.map(o => o.id === optionId ? { ...o, ...data } : o),
+          })),
+          optionGroupsByProductId: Object.fromEntries(
+            Object.entries(state.optionGroupsByProductId).map(([productId, groups]) => [
+              productId,
+              groups.map(g => ({
+                ...g,
+                options: g.options?.map(o => o.id === optionId ? { ...o, ...data } : o),
+              })),
+            ])
+          ),
+        }));
+
+        const { error } = await insforge.database
+          .from('product_options')
+          .update(data)
+          .eq('id', optionId);
+
+        if (error) {
+          console.error('Failed to update option:', error);
+          get().fetchAllOptionGroups();
+          set({ optionGroupsByProductId: {}, optionGroupLoadingByProductId: {} });
+          throw error;
+        }
+        if (productIdForInvalidation) get().invalidateOptionGroups(productIdForInvalidation);
+      },
+
+      deleteOption: async (optionId) => {
+        const groupBefore = get().allOptionGroups.find(g => g.options?.some(o => o.id === optionId));
+        const productIdForInvalidation = groupBefore?.product_id;
+        // Optimistic delete
+        set((state) => ({
+          allOptionGroups: state.allOptionGroups.map(g => ({
+            ...g,
+            options: g.options?.filter(o => o.id !== optionId),
+          })),
+          optionGroupsByProductId: Object.fromEntries(
+            Object.entries(state.optionGroupsByProductId).map(([productId, groups]) => [
+              productId,
+              groups.map(g => ({
+                ...g,
+                options: g.options?.filter(o => o.id !== optionId),
+              })),
+            ])
+          ),
+        }));
+
+        const { error } = await insforge.database
+          .from('product_options')
+          .delete()
+          .eq('id', optionId);
+
+        if (error) {
+          console.error('Failed to delete option:', error);
+          get().fetchAllOptionGroups();
+          set({ optionGroupsByProductId: {}, optionGroupLoadingByProductId: {} });
+          throw error;
+        }
+        if (productIdForInvalidation) get().invalidateOptionGroups(productIdForInvalidation);
       },
     }),
     {

@@ -1,32 +1,208 @@
-# Contributing to Sushi & Grill
+# Contributing
 
-Thank you for your interest in contributing to the Sushi & Grill project! We welcome contributions from the community to help improve this project.
+This project is a Vite + React + TypeScript ordering app connected to InsForge (database, auth, storage, functions).
 
-## Code of Conduct
+If you are a friend/collaborator invited to the InsForge project, you are trusted and can have app-admin access too.
 
-Please note that this project is released with a [Contributor Code of Conduct](CODE_OF_CONDUCT.md). By participating in this project you agree to abide by its terms.
+For AI-assisted contributions, use the prompt library in `PROMPTS.md`.
 
-## How to Contribute
+## Prerequisites
 
-1.  **Fork the repository**
-2.  **Create a new branch** (`git checkout -b feature/amazing-feature`)
-3.  **Commit your changes** (`git commit -m 'feat: add amazing feature'`)
-4.  **Push to the branch** (`git push origin feature/amazing-feature`)
-5.  **Open a Pull Request**
+- Git
+- Node.js 18+
+- npm (recommended; repo includes a lockfile)
+- An InsForge account (the maintainer will invite you)
+- Recommended: VS Code
 
-## Development Setup
+## Clone the Repo
 
-1.  Clone the repo: `git clone https://github.com/yousef-ehabb/sushi-grill-ordering-app.git`
-2.  Install dependencies: `npm install`
-3.  Start the development server: `npm run dev`
+### Option A: Fork workflow (recommended)
 
-## Coding Standards
+1. Fork the repo on GitHub.
+2. Clone your fork:
+   ```bash
+   git clone https://github.com/<your-username>/sushi-grill-ordering-app.git
+   cd sushi-grill-ordering-app
+   ```
+3. Add the upstream remote:
+   ```bash
+   git remote add upstream https://github.com/yousef-ehabb/sushi-grill-ordering-app.git
+   ```
 
--   **TypeScript**: We use TypeScript for type safety. Please ensure all new code is strongly typed.
--   **Tailwind CSS**: Use Tailwind utility classes for styling. Avoid custom CSS when possible.
--   **Structure**: Follow the existing folder structure in `src/app`.
--   **Commits**: We follow [Conventional Commits](https://www.conventionalcommits.org/).
+To get the latest changes later:
+```bash
+git fetch upstream
+git checkout main
+git merge upstream/main
+```
+
+### Option B: Direct clone (team members with repo write access)
+
+```bash
+git clone https://github.com/yousef-ehabb/sushi-grill-ordering-app.git
+cd sushi-grill-ordering-app
+```
+
+## Install and Run
+
+```bash
+npm install
+npm run dev
+```
+
+Open the local URL Vite prints (usually `http://localhost:5173`).
+
+Before opening a PR, run:
+```bash
+npm run build
+```
+
+## IDE Setup (VS Code)
+
+Recommended extensions:
+- Tailwind CSS IntelliSense
+- ESLint (if/when configured)
+- Prettier (optional)
+- GitLens (optional)
+
+Recommended settings:
+- Format on Save: on
+- TypeScript: use workspace version (if prompted)
+
+Useful paths:
+- UI components: `src/app/components/`
+- State management: `src/app/store/`
+- InsForge client: `src/lib/insforge.ts`
+
+## Connecting to the Database (InsForge Dashboard Only)
+
+Contributors use the InsForge dashboard only (no direct Postgres connection tooling).
+
+### 1) Accept the InsForge invite
+
+1. The maintainer invites you to the InsForge project.
+2. Accept the invite.
+3. Open the project in the InsForge dashboard.
+
+### 2) Key safety (important)
+
+InsForge projects expose different key types:
+
+- Anon/public key: safe for frontend usage with RLS enabled.
+- Project API key (often looks like `ik_...`): full project access. Never put this in frontend code.
+
+Rules:
+- Do not paste keys into Issues/PRs/docs.
+- If you suspect a key leak, rotate it in InsForge project settings immediately.
+
+Local MCP config (do not commit secrets):
+- Keep machine-specific MCP credentials in `opencode.local.json` or shell env vars.
+- Start from `opencode.example.json` and keep your working config untracked as `opencode.json`/`opencode.local.json`.
+- Use env var names `INSFORGE_API_KEY` and `INSFORGE_API_BASE_URL`.
+- Never commit `ik_...` project API keys to tracked files.
+
+### 3) App-admin access (required for `/admin`)
+
+This app has its own admin system backed by the `admin_users` table.
+
+Admin login flow (high-level):
+- `/admin/login` asks for `username` + `password`.
+- The app looks up the admin email by `username` in `admin_users`.
+- It signs in via InsForge Auth using that email + password.
+- Admin privileges persist only if `admin_users.user_id` matches the signed-in Auth user id.
+
+Set up an app-admin user:
+1. Create an Auth user (sign up in the app UI).
+2. In the InsForge dashboard, open Authentication -> Users and copy your `user_id`.
+3. In the InsForge dashboard, open Database -> Tables -> `admin_users` and insert a row:
+   - `username`: your chosen admin username (recommended: your GitHub handle)
+   - `email`: the Auth email for your admin user
+   - `user_id`: the Auth user id you copied
+4. Log in at `/admin/login` using `username` + your Auth password.
+
+If admin works once but disappears after refresh, `admin_users.user_id` is probably missing or incorrect.
+
+### 4) Tables used by the app
+
+You will commonly interact with:
+- `categories`
+- `products`
+- `orders`
+- `order_items`
+- `global_settings`
+- `business_rules`
+- `admin_users`
+
+## Making Edits (Workflow)
+
+### Branch naming
+
+- `feature/<short-name>`
+- `fix/<short-name>`
+- `chore/<short-name>`
+
+Example:
+```bash
+git checkout -b feature/group-ordering
+```
+
+### Commit messages
+
+Use Conventional Commits when possible:
+- `feat: ...`
+- `fix: ...`
+- `docs: ...`
+- `refactor: ...`
+- `chore: ...`
+
+### Pull Requests
+
+PRs should include:
+- What changed and why
+- How to test locally
+- Screenshots/screen recording for UI changes
+- Any DB changes you made in InsForge (what + why + how to verify)
+
+## Prompts and Templates (Copy/Paste)
+
+### Feature request (Issue)
+
+Title: `Feature: <short description>`
+
+Body:
+- Problem:
+- Proposed solution:
+- Acceptance criteria:
+- UI scope (components/routes):
+- Data impact (tables/columns/RLS):
+- Function impact (if any):
+- Test plan:
+
+### Bug report (Issue)
+
+Title: `Bug: <short description>`
+
+Body:
+- Expected behavior:
+- Actual behavior:
+- Steps to reproduce:
+- Screenshots/recording:
+- Console errors:
+
+### PR description template
+
+- What:
+- Why:
+- How to test:
+- Screenshots:
+- Notes / risks:
+- Follow-ups:
+
+### AI helper prompt (optional)
+
+"Work in this repo (Vite + React + TypeScript + Zustand + Tailwind + InsForge). Follow existing patterns in `src/app/store/useStore.ts` and `src/app/components/`. Make minimal, safe changes. Don't add new dependencies unless necessary. Provide exact file edits and manual test steps."
 
 ## Reporting Issues
 
-If you find a bug or have a feature request, please open an issue on the [Issues](https://github.com/yousef-ehabb/sushi-grill-ordering-app/issues) page.
+If you find a bug or want a feature, open an issue:
+`https://github.com/yousef-ehabb/sushi-grill-ordering-app/issues`

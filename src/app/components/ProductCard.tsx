@@ -1,30 +1,58 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Plus } from 'lucide-react';
 import { Product, useStore } from '../store/useStore';
 import { toast } from 'sonner';
 import { ProductDetailsModal } from './ProductDetailsModal';
+import { OptionBottomSheet } from './OptionBottomSheet';
 
 interface ProductCardProps {
   product: Product;
 }
 
 export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
-  const { addToCart, categories, globalSettings } = useStore();
+  const {
+    addToCart,
+    categories,
+    globalSettings,
+    fetchProductOptionGroups,
+    optionGroupsByProductId,
+    optionGroupLoadingByProductId,
+  } = useStore();
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+  const [isOptionSheetOpen, setIsOptionSheetOpen] = useState(false);
 
   const category = categories.find(c => c.id === product.category_id);
   const isCategoryInactive = category && !category.is_active;
   const isWebsiteClosed = globalSettings && !globalSettings.is_website_open;
   const isDisabled = !product.is_available || !!isCategoryInactive || !!isWebsiteClosed;
 
+  const groups = optionGroupsByProductId[product.id];
+  const isLoadingOptionGroups = !!optionGroupLoadingByProductId[product.id] || groups === undefined;
+  const resolvedGroups = groups || [];
+  const hasOptions = resolvedGroups.length > 0;
+
+  // Prefetch option groups so we know if this product requires configuration
+  useEffect(() => {
+    if (optionGroupsByProductId[product.id] === undefined) {
+      fetchProductOptionGroups(product.id);
+    }
+  }, [product.id, fetchProductOptionGroups, optionGroupsByProductId]);
+
   const handleAddToCart = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isDisabled) return;
-    addToCart(product);
-    toast.success('تمت الإضافة للسلة', {
-      description: `${product.name_ar} أضيف إلى سلتك`,
-      position: 'bottom-left',
-    });
+
+    if (isLoadingOptionGroups || hasOptions) {
+      // Product has modifiers → open configurator
+      setIsOptionSheetOpen(true);
+    } else {
+      // No modifiers → add directly
+      addToCart(product);
+      toast.success('تمت الإضافة للسلة', {
+        description: `${product.name_ar} أضيف إلى سلتك`,
+        position: 'bottom-left',
+      });
+    }
   };
 
   return (
@@ -81,17 +109,17 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
 
           <button
             onClick={handleAddToCart}
-            disabled={isDisabled}
+            disabled={isDisabled || isLoadingOptionGroups}
             className={`w-full py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-[0.98]
-              ${!isDisabled
+              ${!isDisabled && !isLoadingOptionGroups
                 ? 'bg-slate-900 text-white hover:bg-primary hover:shadow-lg hover:shadow-red-500/20'
                 : 'bg-slate-100 text-slate-400 cursor-not-allowed'
               }`}
           >
-            <div className={`p-1 rounded-full ${!isDisabled ? 'bg-white/20' : 'bg-slate-200'}`}>
+            <div className={`p-1 rounded-full ${!isDisabled && !isLoadingOptionGroups ? 'bg-white/20' : 'bg-slate-200'}`}>
               <Plus className="w-4 h-4" />
             </div>
-            <span>أضف للسلة</span>
+            <span>{isLoadingOptionGroups ? 'جاري التحضير...' : 'أضف للسلة'}</span>
           </button>
         </div>
       </div>
@@ -101,6 +129,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
         product={product}
         isOpen={isDetailsOpen}
         onClose={() => setIsDetailsOpen(false)}
+      />
+
+      {/* Option Configurator Bottom Sheet */}
+      <OptionBottomSheet
+        product={product}
+        isOpen={isOptionSheetOpen}
+        onClose={() => setIsOptionSheetOpen(false)}
       />
     </>
   );

@@ -6,3 +6,5 @@ coverage
 .vscode
 .idea
 *.log
+opencode.json
+opencode.local.json
