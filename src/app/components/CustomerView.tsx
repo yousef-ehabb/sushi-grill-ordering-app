@@ -1,22 +1,29 @@
 import React, { useState, useEffect } from 'react';
 import { useStore } from '../store/useStore';
 import { ProductCard } from './ProductCard';
-import { Search, Flame, Loader2, UtensilsCrossed } from 'lucide-react';
+import { restaurantConfig } from '../../config/restaurant';
+import { Loader2, UtensilsCrossed, Phone } from 'lucide-react';
 
 export const CustomerView: React.FC = () => {
   const { categories, products, fetchCategories, fetchProducts, fetchBusinessRules } = useStore();
   const [activeCategory, setActiveCategory] = useState<string>('');
-  const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isManualScroll, setIsManualScroll] = useState(false);
 
   useEffect(() => {
+    let isMounted = true;
     const loadData = async () => {
       setIsLoading(true);
-      await Promise.all([fetchCategories(), fetchProducts(), fetchBusinessRules()]);
-      setIsLoading(false);
+      // Safeguard: 5-second timeout so user never gets stuck
+      const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 5000));
+      await Promise.race([
+        Promise.all([fetchCategories(), fetchProducts(), fetchBusinessRules()]),
+        timeoutPromise,
+      ]);
+      if (isMounted) setIsLoading(false);
     };
     loadData();
+    return () => { isMounted = false; };
   }, []);
 
   // Set initial active category
@@ -28,7 +35,7 @@ export const CustomerView: React.FC = () => {
 
   // Scroll Spy Logic
   useEffect(() => {
-    if (isManualScroll || searchQuery) return;
+    if (isManualScroll) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -36,20 +43,21 @@ export const CustomerView: React.FC = () => {
         const visibleSections = entries.filter((entry) => entry.isIntersecting);
 
         if (visibleSections.length > 0) {
-          // If multiple sections are visible, prioritizing the one closest to the top-center
-          // logic: find the one with the highest intersection ratio
           const target = visibleSections.reduce((prev, current) => {
             return (prev.intersectionRatio > current.intersectionRatio) ? prev : current;
           });
 
           setActiveCategory(target.target.id);
+
+          // Gently ensure the active category tab is in view in the horizontal scrollbar
+          const tabElement = document.getElementById(`tab-${target.target.id}`);
+          if (tabElement) {
+            tabElement.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+          }
         }
       },
       {
-        // rootMargin: '-140px 0px -70% 0px'
-        // Top: -140px (accounts for sticky headers)
-        // Bottom: -70% (focus detection on the top portion of the screen)
-        rootMargin: '-140px 0px -70% 0px',
+        rootMargin: '-100px 0px -60% 0px',
         threshold: [0, 0.1, 0.5]
       }
     );
@@ -60,150 +68,123 @@ export const CustomerView: React.FC = () => {
     });
 
     return () => observer.disconnect();
-  }, [categories, isManualScroll, searchQuery]);
+  }, [categories, isManualScroll]);
 
   const handleCategoryClick = (categoryId: string) => {
     setIsManualScroll(true);
     setActiveCategory(categoryId);
     const element = document.getElementById(categoryId);
     if (element) {
-      // Offset by header (approx 140px)
-      const offset = 140;
+      // Offset by header + category bar (mobile: ~125px, desktop: ~155px)
+      const isMobile = window.innerWidth < 768;
+      const offset = isMobile ? 125 : 155;
       const elementPosition = element.getBoundingClientRect().top + window.scrollY;
       window.scrollTo({
         top: elementPosition - offset,
         behavior: 'smooth'
       });
 
+      // Center active tab horizontally in the bar
+      const tabElement = document.getElementById(`tab-${categoryId}`);
+      if (tabElement) {
+        tabElement.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+      }
+
       // Reset manual scroll lock after animation
-      setTimeout(() => setIsManualScroll(false), 1000);
+      setTimeout(() => setIsManualScroll(false), 800);
     }
   };
-
-  const filteredProducts = products.filter((product) => {
-    if (!searchQuery) return true;
-    return product.name_ar.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      product.name_en.toLowerCase().includes(searchQuery.toLowerCase());
-  });
 
   // Only show active categories
   const activeCategories = categories.filter(c => c.is_active);
 
-  const bestSellers = products.filter(p => p.is_best_seller && p.is_available);
-
   return (
-    <div className="pb-24 min-h-[60vh]" dir="rtl">
+    <div className="min-h-[60vh]" dir="rtl">
 
-      {/* Search Bar - Not Sticky */}
-      <div className="py-6 px-4">
-        <div className="max-w-2xl mx-auto relative">
-          <Search className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5" />
-          <input
-            type="text"
-            placeholder="ابحث عن وجبتك المفضلة..."
-            className="w-full bg-white border border-slate-200 rounded-2xl py-4 pr-12 pl-4 focus:ring-4 focus:ring-primary/10 focus:border-primary transition-all outline-none shadow-sm text-slate-900 placeholder:text-slate-400 font-medium"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
+      {/* Category Pills - Neatly inside the white section */}
+      <div className="sticky top-[58px] sm:top-[64px] md:top-[72px] z-30 bg-white/95 backdrop-blur-md border-b border-zinc-100 py-3 mb-4 -mx-4 px-4 transition-all">
+        <div className="max-w-7xl mx-auto">
+          <div className="flex gap-2 sm:gap-2.5 overflow-x-auto scrollbar-none snap-x py-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {activeCategories.map((cat) => (
+              <button
+                key={cat.id}
+                id={`tab-${cat.id}`}
+                onClick={() => handleCategoryClick(cat.id)}
+                className={`
+                  whitespace-nowrap px-4 py-2 sm:px-5 sm:py-2.5 rounded-full font-bold text-xs sm:text-sm transition-all border snap-start duration-200 shrink-0
+                  ${activeCategory === cat.id
+                    ? 'bg-red-600 text-white border-red-600 shadow-sm shadow-red-600/30'
+                    : 'bg-zinc-100 text-zinc-700 border-zinc-200/80 hover:bg-zinc-200 hover:text-zinc-900'
+                  }
+                `}
+              >
+                {cat.name_ar}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* Category Navbar - Sticky */}
-      {!searchQuery && (
-        <div className="sticky top-[72px] z-40 bg-slate-50/95 backdrop-blur-xl border-b border-slate-200/50 shadow-sm py-3 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 transition-all">
-          <div className="max-w-7xl mx-auto">
-            <div className="flex gap-3 overflow-x-auto scrollbar-hide snap-x px-1">
-              {activeCategories.map((cat) => (
-                <button
-                  key={cat.id}
-                  onClick={() => handleCategoryClick(cat.id)}
-                  className={`
-                    whitespace-nowrap px-6 py-2.5 rounded-xl font-bold transition-all border snap-start duration-300
-                    ${activeCategory === cat.id
-                      ? 'bg-secondary text-white border-secondary shadow-lg shadow-secondary/20 scale-105'
-                      : 'bg-white text-slate-600 border-slate-200 hover:border-primary hover:text-primary hover:bg-red-50'
-                    }
-                  `}
-                >
-                  {cat.name_ar}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8 space-y-12">
+      {/* Product Grid Container */}
+      <div className="max-w-7xl mx-auto pb-12 pt-2 md:pt-4 space-y-6 md:space-y-10">
         {isLoading ? (
-          <div className="flex flex-col items-center justify-center py-32 gap-4">
-            <Loader2 className="w-10 h-10 text-primary animate-spin" />
-            <p className="text-slate-500 font-medium text-lg">جاري تحميل المنيو الشهي...</p>
+          <div className="flex flex-col items-center justify-center py-24 gap-3">
+            <Loader2 className="w-8 h-8 text-red-600 animate-spin" />
+            <p className="text-zinc-500 font-medium text-sm md:text-base">جاري تحميل المنيو الشهي...</p>
           </div>
-        ) : searchQuery ? (
-          // Search Results View
-          <section>
-            <div className="flex items-center gap-2 mb-6">
-              <Search className="w-6 h-6 text-primary" />
-              <h2 className="text-2xl font-black text-slate-900">نتائج البحث</h2>
-              <span className="text-sm font-bold bg-slate-200 px-2 py-1 rounded-md text-slate-600">
-                {filteredProducts.length}
-              </span>
-            </div>
-
-            {filteredProducts.length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                {filteredProducts.map(product => (
-                  <ProductCard key={product.id} product={product} />
-                ))}
-              </div>
-            ) : (
-              <div className="col-span-full py-20 text-center bg-white rounded-3xl border border-dashed border-slate-200">
-                <div className="inline-flex bg-slate-50 p-4 rounded-full mb-4">
-                  <Search className="w-8 h-8 text-slate-400" />
-                </div>
-                <h3 className="text-xl font-bold text-slate-900 mb-2">لم نجد ما تبحث عنه</h3>
-                <p className="text-slate-500">جرب البحث بكلمات أخرى</p>
-                <button
-                  onClick={() => setSearchQuery('')}
-                  className="mt-6 text-primary font-bold hover:underline"
-                >
-                  عرض كل المنيو
-                </button>
-              </div>
-            )}
-          </section>
         ) : (
           // Categorized View
-          <>
-            {activeCategories.map((category) => {
-              const categoryProducts = products.filter(p => p.category_id === category.id);
-              if (categoryProducts.length === 0) return null;
+          products.length > 0 ? (
+            <>
+              {activeCategories.map((category) => {
+                const categoryProducts = products.filter(p => p.category_id === category.id);
+                if (categoryProducts.length === 0) return null;
 
-              return (
-                <section
-                  key={category.id}
-                  id={category.id}
-                  className="scroll-mt-[180px] bg-white rounded-3xl p-6 md:p-8 border border-slate-100 shadow-sm transition-all hover:shadow-md hover:border-slate-200"
+                return (
+                  <section
+                    key={category.id}
+                    id={category.id}
+                    className="scroll-mt-[125px] md:scroll-mt-[155px]"
+                  >
+                    <div className="flex items-center gap-2.5 md:gap-3 mb-4 md:mb-6 border-b border-zinc-100 pb-3 md:pb-4">
+                      <div className="w-1.5 h-6 md:h-7 bg-red-600 rounded-full"></div>
+                      <h2 className="text-lg sm:text-xl md:text-2xl font-black text-zinc-900">
+                        {category.name_ar}
+                      </h2>
+                      <span className="text-xs sm:text-sm font-bold bg-amber-50 text-amber-800 px-2.5 py-0.5 md:px-3 md:py-1 rounded-full border border-amber-200/80">
+                        {categoryProducts.length} أصناف
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4 md:gap-6">
+                      {categoryProducts.map((product) => (
+                        <ProductCard key={product.id} product={product} />
+                      ))}
+                    </div>
+                  </section>
+                );
+              })}
+            </>
+          ) : (
+            <div className="col-span-full py-16 px-6 text-center bg-white rounded-3xl border border-zinc-200 shadow-sm">
+              <div className="inline-flex bg-red-50 p-4 rounded-full mb-4">
+                <UtensilsCrossed className="w-8 h-8 text-red-600" />
+              </div>
+              <h3 className="text-xl font-black text-slate-900 mb-2">القائمة قيد التحديث</h3>
+              <p className="text-slate-500 max-w-md mx-auto mb-6">
+                نسعد بخدمتكم وتجهيز طلباتكم. يمكنك الاتصال بنا مباشرة لمعرفة أحدث العروض والطلبات السريعة.
+              </p>
+              <div className="flex justify-center gap-3">
+                <a
+                  href={`tel:${restaurantConfig.contact.primaryPhone}`}
+                  className="bg-primary hover:bg-red-700 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2"
                 >
-                  <div className="flex items-center gap-3 mb-8 border-b border-slate-100 pb-4">
-                    <div className="w-1.5 h-8 bg-primary rounded-full"></div>
-                    <h2 className="text-2xl md:text-3xl font-black text-slate-900">
-                      {category.name_ar}
-                    </h2>
-                    <span className="text-sm font-bold bg-slate-50 text-slate-400 px-3 py-1 rounded-full border border-slate-100">
-                      {categoryProducts.length}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                    {categoryProducts.map((product) => (
-                      <ProductCard key={product.id} product={product} />
-                    ))}
-                  </div>
-                </section>
-              );
-            })}
-          </>
+                  <Phone className="w-4 h-4" />
+                  اتصل بنا ({restaurantConfig.contact.primaryPhone})
+                </a>
+              </div>
+            </div>
+          )
         )}
       </div>
     </div>

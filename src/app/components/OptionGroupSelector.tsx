@@ -1,5 +1,6 @@
 import React, { useCallback } from 'react';
 import { clsx } from 'clsx';
+import { Check } from 'lucide-react';
 import { toast } from 'sonner';
 import type { OptionGroup, ProductOption } from '../store/useStore';
 
@@ -14,7 +15,7 @@ export const OptionGroupSelector: React.FC<OptionGroupSelectorProps> = ({
   groups,
   selectedOptions,
   setSelectedOptions,
-  variant = 'sheet',
+  variant = 'modal',
 }) => {
   const handleOptionClick = useCallback((option: ProductOption, group: OptionGroup) => {
     if (!option.is_active) return;
@@ -26,6 +27,12 @@ export const OptionGroupSelector: React.FC<OptionGroupSelectorProps> = ({
       }
 
       const groupSelections = prev.filter((id) => group.options?.some((o) => o.id === id));
+      if (group.max_select === 1) {
+        // If single choice, replace selection in this group
+        const withoutGroup = prev.filter((id) => !group.options?.some((o) => o.id === id));
+        return [...withoutGroup, option.id];
+      }
+
       if (groupSelections.length >= group.max_select) {
         toast.warning(`يمكنك اختيار ${group.max_select} بحد أقصى`);
         return prev;
@@ -40,82 +47,117 @@ export const OptionGroupSelector: React.FC<OptionGroupSelectorProps> = ({
   }, [selectedOptions]);
 
   return (
-    <>
+    <div className="space-y-5">
       {groups.map((group) => {
         const count = getGroupSelectionCount(group);
+        const isSingleChoice = group.max_select === 1;
+        const optionsList = group.options
+          ?.slice()
+          .sort((a, b) => Number(b.is_active) - Number(a.is_active)) || [];
+
         return (
-          <div key={group.id} className="space-y-3">
-            <div className="flex justify-between items-center">
+          <div key={group.id} className="space-y-2.5">
+            {/* Group Header */}
+            <div className="flex justify-between items-center px-0.5">
               <div className="flex items-center gap-2">
-                <h4 className="text-sm font-bold text-slate-700">{group.name_ar}</h4>
-                {group.min_select > 0 && (
-                  <span className="text-[10px] bg-red-50 text-primary px-2 py-0.5 rounded-full font-bold">إلزامي</span>
+                <h4 className="text-sm font-black text-zinc-900 tracking-tight">{group.name_ar}</h4>
+                {group.min_select > 0 ? (
+                  <span className="text-[10px] bg-red-50 text-[#DC2626] border border-red-100 px-2 py-0.5 rounded-full font-bold">
+                    إلزامي
+                  </span>
+                ) : (
+                  <span className="text-[10px] bg-zinc-100 text-zinc-500 px-2 py-0.5 rounded-full font-medium">
+                    اختياري
+                  </span>
                 )}
               </div>
-              {variant === 'sheet' ? (
-                <span className={clsx(
-                  'text-xs font-bold px-2.5 py-1 rounded-full transition-colors',
-                  count > 0 ? 'bg-primary/10 text-primary' : 'bg-slate-100 text-slate-400'
-                )}>
-                  {count}/{group.max_select}
-                </span>
-              ) : (
-                <span className="text-[10px] bg-slate-100 text-slate-400 px-2 py-0.5 rounded-full font-bold">
-                  (حد أقصى {group.max_select})
-                </span>
-              )}
+              <span className={clsx(
+                'text-xs font-bold px-2.5 py-0.5 rounded-full transition-colors',
+                count > 0 ? 'bg-red-50 text-[#DC2626] border border-red-100' : 'bg-zinc-100 text-zinc-500'
+              )}>
+                {count > 0
+                  ? `تم تحديد ${count}/${group.max_select}`
+                  : isSingleChoice
+                    ? 'اختر 1'
+                    : `حد أقصى ${group.max_select}`}
+              </span>
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              {group.options
-                ?.slice()
-                .sort((a, b) => Number(b.is_active) - Number(a.is_active))
-                .map((option) => {
-                  const isSelected = selectedOptions.includes(option.id);
-                  const isInactive = !option.is_active;
+            {/* Options Cards Grid */}
+            <div className={clsx(
+              'grid gap-2.5',
+              optionsList.length === 1 ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2'
+            )}>
+              {optionsList.map((option) => {
+                const isSelected = selectedOptions.includes(option.id);
+                const isInactive = !option.is_active;
 
-                  return (
-                    <button
-                      key={option.id}
-                      type="button"
-                      disabled={isInactive}
-                      onClick={() => handleOptionClick(option, group)}
-                      className={clsx(
-                        variant === 'sheet'
-                          ? 'px-4 py-2.5 rounded-xl text-sm font-bold transition-all border-2'
-                          : 'px-4 py-2 rounded-xl text-sm font-medium transition-all border text-right flex items-center gap-2',
-                        isInactive
-                          ? (variant === 'sheet'
-                            ? 'opacity-50 border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed pointer-events-none'
-                            : 'opacity-40 cursor-not-allowed border-transparent grayscale pointer-events-none')
-                          : isSelected
-                            ? (variant === 'sheet'
-                              ? 'border-primary bg-red-50 text-primary shadow-sm shadow-red-500/10 scale-[1.02]'
-                              : 'bg-primary text-white border-primary shadow-md shadow-red-500/10')
-                            : (variant === 'sheet'
-                              ? 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 active:scale-95'
-                              : 'bg-slate-50 text-slate-600 border-slate-100 hover:border-slate-200 active:scale-95')
-                      )}
-                    >
-                      <span>{option.name_ar}</span>
-                      {option.price_delta > 0 && (
-                        <span className={clsx(
-                          variant === 'sheet' ? 'text-[10px] mr-1' : 'text-[10px] font-bold px-1.5 py-0.5 rounded-md',
-                          variant === 'sheet'
-                            ? (isSelected ? 'text-primary/60' : 'text-slate-400')
-                            : (isSelected ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-500')
-                        )}>
-                          +{option.price_delta}
-                          {variant === 'sheet' ? ' ج.م' : ''}
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    disabled={isInactive}
+                    onClick={() => handleOptionClick(option, group)}
+                    className={clsx(
+                      'group/card relative p-3.5 sm:p-4 rounded-2xl border text-right transition-all flex items-center justify-between gap-3 text-sm cursor-pointer select-none min-h-[54px]',
+                      isInactive
+                        ? 'opacity-40 bg-zinc-50 border-zinc-200 text-zinc-400 cursor-not-allowed pointer-events-none'
+                        : isSelected
+                          ? 'border-[#DC2626] bg-red-50/70 text-zinc-950 shadow-xs ring-1 ring-[#DC2626]/20 font-bold'
+                          : 'border-zinc-200 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 text-zinc-700 active:scale-[0.99]'
+                    )}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      {/* Check / Radio indicator */}
+                      <div
+                        className={clsx(
+                          'w-5 h-5 flex items-center justify-center shrink-0 border transition-all',
+                          isSingleChoice ? 'rounded-full' : 'rounded-lg',
+                          isSelected
+                            ? 'bg-[#DC2626] border-[#DC2626] text-white shadow-xs'
+                            : 'border-zinc-300 bg-white group-hover/card:border-zinc-400'
+                        )}
+                      >
+                        {isSelected && (
+                          isSingleChoice ? (
+                            <div className="w-2 h-2 rounded-full bg-white" />
+                          ) : (
+                            <Check className="w-3.5 h-3.5 stroke-[3]" />
+                          )
+                        )}
+                      </div>
+                      <span className="truncate text-xs sm:text-sm font-bold text-zinc-800">
+                        {option.name_ar}
+                      </span>
+                    </div>
+
+                    {/* Distinct Price Badge */}
+                    <div className="shrink-0">
+                      {option.price_delta > 0 ? (
+                        <span
+                          className={clsx(
+                            'text-xs font-black px-2.5 py-1 rounded-xl border transition-colors',
+                            isSelected
+                              ? 'bg-[#DC2626] text-white border-transparent shadow-xs'
+                              : 'bg-red-50 text-[#DC2626] border-red-100'
+                          )}
+                        >
+                          +{option.price_delta} ج.م
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-zinc-400 font-semibold px-2 py-0.5">
+                          مجاناً
                         </span>
                       )}
-                    </button>
-                  );
-                })}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           </div>
         );
       })}
-    </>
+    </div>
   );
 };
+

@@ -1,0 +1,316 @@
+{
+  "restaurant_settings": {
+    "general": {
+      "name_ar": "بوشنكي - ملوك البرجر",
+      "name_en": "Pochinki Burger",
+      "tagline_ar": "ملوك البرجر",
+      "tagline_en": "Kings of Burger",
+      "currency": "ج.م",
+      "is_open": true,
+      "closed_message": "المطعم مغلق حالياً، نسعد باستقبال طلباتكم في أوقات العمل القادمة",
+      "delivery_fee": 25,
+      "min_order_amount": 80,
+      "estimated_delivery_time": "30-45 دقيقة",
+      "allow_delivery": true,
+      "allow_pickup": true,
+      "allow_guest_checkout": true,
+      "contact": {
+        "primary_phone": "01111185254",
+        "branches": [
+          {
+            "id": "stadium",
+            "name_ar": "فرع الاستاد (الرئيسي)",
+            "name_en": "Stadium Branch",
+            "phones": ["01111185254"],
+            "is_main": true
+          },
+          {
+            "id": "caravan",
+            "name_ar": "فرع الكرفان",
+            "name_en": "Caravan Branch",
+            "phones": ["01155749595", "01146109985"]
+          }
+        ]
+      },
+      "social": {
+        "instagram": "pochi.nkiburger",
+        "instagram_url": "https://www.instagram.com/pochi.nkiburger",
+        "facebook": "pochinki burger",
+        "facebook_url": "https://www.facebook.com/pochinki burger"
+      }
+    }
+  },
+  "categories": [
+    {
+      "id": "cat-beef-mix",
+      "name_ar": "برجر لحم وميكس",
+      "name_en": "Beef & Mix Burgers",
+      "sort_order": 1,
+      "is_active": true
+    },
+    {
+      "id": "cat-chicken",
+      "name_ar": "برجر فراخ",
+      "name_en": "Chicken Burgers",
+      "sort_order": 2,
+      "is_active": true
+    }
+  ],
+  "products": [
+    {
+      "id": "prod-akm",
+      "category_id": "cat-beef-mix",
+      "name_ar": "AKM",
+      "name_en": "AKM Beef Burger",
+      "description_ar": "قطعة لحمة بلدي - خس - طماطم - خيار مخلل - روز بيف - صوص التكساس - صوص كاتشب + بطاطس",
+      "price": 120,
+      "image_url": "/AKM.jpg",
+      "is_available": true,
+      "sort_order": 1,
+      "option_groups": [
+        {
+          "id": "grp-upgrade-akm",
+          "title_ar": "ترقية الساندوتش",
+          "min_select": 0,
+          "max_select": 1,
+          "is_required": false,
+          "options": [
+            { "id": "opt-extra-fries-akm", "name_ar": "إكسترا بطاطس + صوص", "price_delta": 30 }
+          ]
+        },
+        {
+          "id": "grp-sauces-akm",
+          "title_ar": "إضافات الصوصات",
+          "min_select": 0,
+          "max_select": 4,
+          "is_required": false,
+          "options": [
+            { "id": "opt-hot-akm", "name_ar": "صوص حار", "price_delta": 10 },
+            { "id": "opt-ranch-akm", "name_ar": "صوص رانش", "price_delta": 10 },
+            { "id": "opt-texas-akm", "name_ar": "صوص تكساس", "price_delta": 20 },
+            { "id": "opt-cheddar-akm", "name_ar": "صوص شيدر", "price_delta": 20 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "prod-ump",
+      "category_id": "cat-beef-mix",
+      "name_ar": "UMP",
+      "name_en": "UMP Beef & Fried Cheese",
+      "description_ar": "قطعة لحمة بلدي - شريحة جبنة مقلية - خس - طماطم - خيار مخلل - روز بيف - صوص التكساس - صوص الكاتشب + بطاطس",
+      "price": 140,
+      "image_url": "/UMP.jpg",
+      "is_available": true,
+      "sort_order": 2,
+      "option_groups": [
+        {
+          "id": "grp-upgrade-ump",
+          "title_ar": "ترقية الساندوتش",
+          "min_select": 0,
+          "max_select": 1,
+          "is_required": false,
+          "options": [
+            { "id": "opt-extra-fries-ump", "name_ar": "إكسترا بطاطس + صوص", "price_delta": 30 }
+          ]
+        },
+        {
+          "id": "grp-sauces-ump",
+          "title_ar": "إضافات الصوصات",
+          "min_select": 0,
+          "max_select": 4,
+          "is_required": false,
+          "options": [
+            { "id": "opt-hot-ump", "name_ar": "صوص حار", "price_delta": 10 },
+            { "id": "opt-ranch-ump", "name_ar": "صوص رانش", "price_delta": 10 },
+            { "id": "opt-texas-ump", "name_ar": "صوص تكساس", "price_delta": 20 },
+            { "id": "opt-cheddar-ump", "name_ar": "صوص شيدر", "price_delta": 20 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "prod-m4",
+      "category_id": "cat-beef-mix",
+      "name_ar": "M4",
+      "name_en": "M4 Double Beef Burger",
+      "description_ar": "2 قطعة لحمة بلدي - خس - طماطم - خيار مخلل - روز بيف - صوص التكساس - صوص الكاتشب + بطاطس",
+      "price": 165,
+      "image_url": "/M4.jpg",
+      "is_available": true,
+      "sort_order": 3,
+      "option_groups": [
+        {
+          "id": "grp-upgrade-m4",
+          "title_ar": "ترقية الساندوتش",
+          "min_select": 0,
+          "max_select": 1,
+          "is_required": false,
+          "options": [
+            { "id": "opt-extra-fries-m4", "name_ar": "إكسترا بطاطس + صوص", "price_delta": 30 }
+          ]
+        },
+        {
+          "id": "grp-sauces-m4",
+          "title_ar": "إضافات الصوصات",
+          "min_select": 0,
+          "max_select": 4,
+          "is_required": false,
+          "options": [
+            { "id": "opt-hot-m4", "name_ar": "صوص حار", "price_delta": 10 },
+            { "id": "opt-ranch-m4", "name_ar": "صوص رانش", "price_delta": 10 },
+            { "id": "opt-texas-m4", "name_ar": "صوص تكساس", "price_delta": 20 },
+            { "id": "opt-cheddar-m4", "name_ar": "صوص شيدر", "price_delta": 20 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "prod-pochinki",
+      "category_id": "cat-beef-mix",
+      "name_ar": "Pochinki",
+      "name_en": "Pochinki Special Mix",
+      "description_ar": "قطعة لحمة بلدي - قطعتين فرايد تشيكن - خس - طماطم - خيار مخلل - صوص تكساس - صوص رانش - روز بيف + بطاطس",
+      "price": 180,
+      "badge": "الأكثر طلباً",
+      "is_best_seller": true,
+      "image_url": "/Pochinki.jpg",
+      "is_available": true,
+      "sort_order": 4,
+      "option_groups": [
+        {
+          "id": "grp-upgrade-pochinki",
+          "title_ar": "ترقية الساندوتش",
+          "min_select": 0,
+          "max_select": 1,
+          "is_required": false,
+          "options": [
+            { "id": "opt-extra-fries-pochinki", "name_ar": "إكسترا بطاطس + صوص", "price_delta": 30 }
+          ]
+        },
+        {
+          "id": "grp-sauces-pochinki",
+          "title_ar": "إضافات الصوصات",
+          "min_select": 0,
+          "max_select": 4,
+          "is_required": false,
+          "options": [
+            { "id": "opt-hot-pochinki", "name_ar": "صوص حار", "price_delta": 10 },
+            { "id": "opt-ranch-pochinki", "name_ar": "صوص رانش", "price_delta": 10 },
+            { "id": "opt-texas-pochinki", "name_ar": "صوص تكساس", "price_delta": 20 },
+            { "id": "opt-cheddar-pochinki", "name_ar": "صوص شيدر", "price_delta": 20 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "prod-awm",
+      "category_id": "cat-chicken",
+      "name_ar": "AWM",
+      "name_en": "AWM Crispy Chicken",
+      "description_ar": "قطعتين فرايد تشيكن - خس - طماطم - خيار مخلل - تركي مدخن - صوص كاتشب - صوص الرانش + بطاطس",
+      "price": 120,
+      "image_url": "/AWM.jpg",
+      "is_available": true,
+      "sort_order": 5,
+      "option_groups": [
+        {
+          "id": "grp-upgrade-awm",
+          "title_ar": "ترقية الساندوتش",
+          "min_select": 0,
+          "max_select": 1,
+          "is_required": false,
+          "options": [
+            { "id": "opt-extra-fries-awm", "name_ar": "إكسترا بطاطس + صوص", "price_delta": 30 }
+          ]
+        },
+        {
+          "id": "grp-sauces-awm",
+          "title_ar": "إضافات الصوصات",
+          "min_select": 0,
+          "max_select": 4,
+          "is_required": false,
+          "options": [
+            { "id": "opt-hot-awm", "name_ar": "صوص حار", "price_delta": 10 },
+            { "id": "opt-ranch-awm", "name_ar": "صوص رانش", "price_delta": 10 },
+            { "id": "opt-texas-awm", "name_ar": "صوص تكساس", "price_delta": 20 },
+            { "id": "opt-cheddar-awm", "name_ar": "صوص شيدر", "price_delta": 20 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "prod-kar",
+      "category_id": "cat-chicken",
+      "name_ar": "KAR",
+      "name_en": "KAR Giant Chicken (4 Pieces)",
+      "description_ar": "أربع قطع فرايد تشيكن - خس - طماطم - خيار مخلل - تركي مدخن - صوص كاتشب - صوص رانش + بطاطس",
+      "price": 170,
+      "image_url": "/KAR.jpg",
+      "is_available": true,
+      "sort_order": 6,
+      "option_groups": [
+        {
+          "id": "grp-upgrade-kar",
+          "title_ar": "ترقية الساندوتش",
+          "min_select": 0,
+          "max_select": 1,
+          "is_required": false,
+          "options": [
+            { "id": "opt-extra-fries-kar", "name_ar": "إكسترا بطاطس + صوص", "price_delta": 30 }
+          ]
+        },
+        {
+          "id": "grp-sauces-kar",
+          "title_ar": "إضافات الصوصات",
+          "min_select": 0,
+          "max_select": 4,
+          "is_required": false,
+          "options": [
+            { "id": "opt-hot-kar", "name_ar": "صوص حار", "price_delta": 10 },
+            { "id": "opt-ranch-kar", "name_ar": "صوص رانش", "price_delta": 10 },
+            { "id": "opt-texas-kar", "name_ar": "صوص تكساس", "price_delta": 20 },
+            { "id": "opt-cheddar-kar", "name_ar": "صوص شيدر", "price_delta": 20 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "prod-scar-l",
+      "category_id": "cat-chicken",
+      "name_ar": "SCAR-L",
+      "name_en": "SCAR-L Coleslaw Chicken",
+      "description_ar": "قطعة برجر فراخ - كول سلو - صوص رانش + بطاطس",
+      "price": 130,
+      "badge": "جديد",
+      "image_url": "/SCAR-L.jpg",
+      "is_available": true,
+      "sort_order": 7,
+      "option_groups": [
+        {
+          "id": "grp-upgrade-scar-l",
+          "title_ar": "ترقية الساندوتش",
+          "min_select": 0,
+          "max_select": 1,
+          "is_required": false,
+          "options": [
+            { "id": "opt-extra-fries-scar-l", "name_ar": "إكسترا بطاطس + صوص", "price_delta": 30 }
+          ]
+        },
+        {
+          "id": "grp-sauces-scar-l",
+          "title_ar": "إضافات الصوصات",
+          "min_select": 0,
+          "max_select": 4,
+          "is_required": false,
+          "options": [
+            { "id": "opt-hot-scar-l", "name_ar": "صوص حار", "price_delta": 10 },
+            { "id": "opt-ranch-scar-l", "name_ar": "صوص رانش", "price_delta": 10 },
+            { "id": "opt-texas-scar-l", "name_ar": "صوص تكساس", "price_delta": 20 },
+            { "id": "opt-cheddar-scar-l", "name_ar": "صوص شيدر", "price_delta": 20 }
+          ]
+        }
+      ]
+    }
+  ]
+}

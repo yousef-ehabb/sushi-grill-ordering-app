@@ -1,7 +1,24 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { insforge } from '../../lib/insforge';
+import { doc, updateDoc, collection, getDocs, query, where, addDoc, deleteDoc, setDoc } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { db, isFirebaseConfigured } from '../../lib/firebase';
+import { getStorage } from 'firebase/storage';
 import { computeOptionsPrice } from '../utils/price';
+import {
+  categoriesService,
+  productsService,
+  settingsService,
+  ordersService,
+} from '../../services/firestore';
+import {
+  INITIAL_CATEGORIES,
+  INITIAL_PRODUCTS,
+  INITIAL_OPTION_GROUPS_BY_PRODUCT,
+  INITIAL_GLOBAL_SETTINGS,
+  INITIAL_BUSINESS_RULES,
+  createOptionGroupsForProduct,
+} from '../../data/mockData';
 
 export type Category = {
   id: string;
@@ -22,6 +39,7 @@ export type Product = {
   is_available: boolean;
   is_best_seller?: boolean;
   is_chef_pick?: boolean;
+  badge?: string;
   ingredients_ar?: string[];
 };
 
@@ -156,45 +174,40 @@ interface AppState {
 export const useStore = create<AppState>()(
   persist(
     (set, get) => ({
-      categories: [],
-      products: [],
-      optionGroupsByProductId: {},
+      categories: INITIAL_CATEGORIES,
+      products: INITIAL_PRODUCTS,
+      optionGroupsByProductId: INITIAL_OPTION_GROUPS_BY_PRODUCT,
       optionGroupLoadingByProductId: {},
-      allOptionGroups: [],
+      allOptionGroups: Object.values(INITIAL_OPTION_GROUPS_BY_PRODUCT).flat(),
       cart: [],
       orders: [],
       orderType: null,
       loading: false,
       error: null,
-      globalSettings: null,
-      businessRules: [],
+      globalSettings: INITIAL_GLOBAL_SETTINGS,
+      businessRules: INITIAL_BUSINESS_RULES,
       activeOrder: null,
 
       // ── Data Fetching ──────────────────────────────────────
 
       fetchCategories: async () => {
-        const { data, error } = await insforge.database
-          .from('categories')
-          .select()
-          .order('sort_order', { ascending: true });
-
-        if (error) {
-          console.error('Failed to fetch categories:', error);
-          return;
+        try {
+          const categories = await categoriesService.getCategories();
+          set({ categories });
+        } catch (err) {
+          console.warn('Error fetching categories, fallback to initial categories:', err);
+          set({ categories: INITIAL_CATEGORIES });
         }
-        set({ categories: data || [] });
       },
 
       fetchProducts: async () => {
-        const { data, error } = await insforge.database
-          .from('products')
-          .select();
-
-        if (error) {
-          console.error('Failed to fetch products:', error);
-          return;
+        try {
+          const products = await productsService.getProducts();
+          set({ products });
+        } catch (err) {
+          console.warn('Error fetching products, fallback to initial products:', err);
+          set({ products: INITIAL_PRODUCTS });
         }
-        set({ products: data || [] });
       },
 
       fetchProductOptionGroups: async (productId: string, forceReload?: boolean) => {
@@ -210,42 +223,31 @@ export const useStore = create<AppState>()(
           },
         }));
 
-        const { data: groups, error: groupError } = await insforge.database
-          .from('product_option_groups')
-          .select('*, options:product_options(*)')
-          .eq('product_id', productId)
-          .eq('is_active', true)
-          .order('sort_order', { ascending: true });
-
-        if (groupError) {
-          console.error('Failed to fetch option groups:', groupError);
+        try {
+          const orderedGroups = await productsService.getOptionGroupsForProduct(productId);
           set((current) => ({
+            optionGroupsByProductId: {
+              ...current.optionGroupsByProductId,
+              [productId]: orderedGroups,
+            },
             optionGroupLoadingByProductId: {
               ...current.optionGroupLoadingByProductId,
               [productId]: false,
             },
           }));
-          return;
+        } catch {
+          const fallbackGroups = INITIAL_OPTION_GROUPS_BY_PRODUCT[productId] || createOptionGroupsForProduct(productId);
+          set((current) => ({
+            optionGroupsByProductId: {
+              ...current.optionGroupsByProductId,
+              [productId]: fallbackGroups,
+            },
+            optionGroupLoadingByProductId: {
+              ...current.optionGroupLoadingByProductId,
+              [productId]: false,
+            },
+          }));
         }
-
-        // Order options by sort_order and keep only active options in client state
-        const orderedGroups = (groups || []).map((group: any) => ({
-          ...group,
-          options: (group.options || [])
-            .filter((o: any) => o.is_active === true)
-            .sort((a: any, b: any) => a.sort_order - b.sort_order)
-        }));
-
-        set((state) => ({
-          optionGroupsByProductId: {
-            ...state.optionGroupsByProductId,
-            [productId]: orderedGroups
-          },
-          optionGroupLoadingByProductId: {
-            ...state.optionGroupLoadingByProductId,
-            [productId]: false,
-          }
-        }));
       },
 
       invalidateOptionGroups: (productId: string) => {
@@ -257,71 +259,46 @@ export const useStore = create<AppState>()(
       },
 
       fetchOrders: async () => {
-        const { data, error } = await insforge.database
-          .from('orders')
-          .select('*, order_items(*)')
-          .order('created_at', { ascending: false });
-
-        if (error) {
+        try {
+          const orders = await ordersService.getAllOrders();
+          set({ orders });
+        } catch (error) {
           console.error('Failed to fetch orders:', error);
-          return;
         }
-
-        const ordersWithItems: Order[] = (data || []).map((order: any) => ({
-          ...order,
-          items: (order.order_items || []).map((item: any) => ({
-            id: item.id,
-            product_id: item.product_id,
-            name_ar: item.name_ar,
-            quantity: item.quantity,
-            unit_price: item.unit_price,
-            selected_option_ids: item.selected_option_ids,
-            special_instructions: item.special_instructions,
-          })),
-        }));
-
-        set({ orders: ordersWithItems });
       },
 
       fetchActiveOrder: async () => {
-        const { data, error } = await insforge.database
-          .from('orders')
-          .select('id, status')
-          .not('status', 'in', '(completed,cancelled)')
-          .order('created_at', { ascending: false })
-          .limit(1);
-
-        if (error || !data || data.length === 0) {
+        try {
+          const orders = await ordersService.getAllOrders();
+          const active = orders.find(
+            (o) => o.status !== 'completed' && o.status !== 'cancelled'
+          );
+          if (active) {
+            set({ activeOrder: { id: active.id, status: active.status } });
+          } else {
+            set({ activeOrder: null });
+          }
+        } catch (error) {
           set({ activeOrder: null });
-          return;
         }
-        set({ activeOrder: { id: data[0].id, status: data[0].status } });
       },
 
       fetchGlobalSettings: async () => {
-        const { data, error } = await insforge.database
-          .from('global_settings')
-          .select();
-
-        if (error) {
-          console.error('Failed to fetch global settings:', error);
-          return;
-        }
-        if (data && data.length > 0) {
-          set({ globalSettings: data[0] });
+        try {
+          const globalSettings = await settingsService.getGlobalSettings();
+          set({ globalSettings });
+        } catch {
+          set({ globalSettings: INITIAL_GLOBAL_SETTINGS });
         }
       },
 
       fetchBusinessRules: async () => {
-        const { data, error } = await insforge.database
-          .from('business_rules')
-          .select();
-
-        if (error) {
-          console.error('Failed to fetch business rules:', error);
-          return;
+        try {
+          const businessRules = await settingsService.getBusinessRules();
+          set({ businessRules });
+        } catch {
+          set({ businessRules: INITIAL_BUSINESS_RULES });
         }
-        set({ businessRules: data || [] });
       },
 
       // ── Cart Actions ───────────────────────────────────────
@@ -420,43 +397,29 @@ export const useStore = create<AppState>()(
             return sum + itemTotal;
           }, 0);
 
-          const orderPayload = {
+          const orderId = await ordersService.createOrder({
             customer_name: orderData.customer_name,
             customer_phone: orderData.customer_phone,
             address: orderData.address,
             user_id: orderData.user_id,
             type: orderData.type,
-            items: orderData.items.map(item => ({
+            total: clientComputedTotal,
+            status: 'new',
+            items: orderData.items.map((item) => ({
+              id: 'item_' + Math.random().toString(36).substring(2, 7),
               product_id: item.id,
-              category_id: item.category_id,
+              name_ar: item.name_ar,
               quantity: item.quantity,
+              unit_price: (item.price ?? 0) + (item.optionsPrice ?? 0),
               selected_option_ids: item.selectedOptionIds,
               special_instructions: item.specialInstructions,
             })),
-            client_total: clientComputedTotal,
-          };
-
-          const response = await insforge.functions.invoke('place-order', {
-            body: orderPayload,
           });
 
-          if (response.error) {
-            const err = response.error as any;
-            const errorMsg = err.message || err.error || (typeof err === 'object' ? JSON.stringify(err) : String(err)) || 'فشل إنشاء الطلب';
-            throw new Error(errorMsg);
-          }
-
-          const result = response.data;
-
-          if (!result || !result.success) {
-            const errorMsg = result?.errors?.join('\n') || result?.error || 'فشل إنشاء الطلب';
-            throw new Error(errorMsg);
-          }
-
           set({ loading: false });
-          return result.order_id;
+          return orderId;
         } catch (err: any) {
-          set({ loading: false, error: err.message });
+          set({ loading: false, error: err.message || 'فشل إنشاء الطلب' });
           console.error('Order submission failed:', err);
           return null;
         }
@@ -534,12 +497,10 @@ export const useStore = create<AppState>()(
           ),
         }));
 
-        const { error } = await insforge.database
-          .from('products')
-          .update({ is_available: newValue })
-          .eq('id', productId);
-
-        if (error) {
+        if (!isFirebaseConfigured() || !db) return;
+        try {
+          await updateDoc(doc(db, 'products', productId), { is_available: newValue });
+        } catch (error) {
           set((state) => ({
             products: state.products.map((p) =>
               p.id === productId ? { ...p, is_available: !newValue } : p
@@ -556,12 +517,9 @@ export const useStore = create<AppState>()(
           ),
         }));
 
-        const { error } = await insforge.database
-          .from('orders')
-          .update({ status })
-          .eq('id', orderId);
-
-        if (error) {
+        try {
+          await ordersService.updateOrderStatus(orderId, status);
+        } catch (error) {
           console.error('Failed to update order status:', error);
           get().fetchOrders();
         }
@@ -574,32 +532,26 @@ export const useStore = create<AppState>()(
           ),
         }));
 
-        const { error } = await insforge.database
-          .from('products')
-          .update(data)
-          .eq('id', id);
-
-        if (error) {
+        if (!isFirebaseConfigured() || !db) return;
+        try {
+          await updateDoc(doc(db, 'products', id), data);
+        } catch (error) {
           console.error('Failed to update product:', error);
           get().fetchProducts();
         }
       },
 
       uploadProductImage: async (_productId, file) => {
+        if (!isFirebaseConfigured()) return null;
         try {
+          const storage = getStorage();
           const ext = file.name.split('.').pop() || 'jpg';
-          const fileName = `product-${_productId}-${Date.now()}.${ext}`;
+          const fileName = `menu-images/product-${_productId}-${Date.now()}.${ext}`;
+          const storageRef = ref(storage, fileName);
 
-          const { data, error } = await insforge.storage
-            .from('menu-images')
-            .upload(fileName, file);
-
-          if (error || !data) {
-            console.error('Failed to upload image:', error);
-            return null;
-          }
-
-          return data.url;
+          const snapshot = await uploadBytes(storageRef, file);
+          const url = await getDownloadURL(snapshot.ref);
+          return url;
         } catch (err: any) {
           console.error('Image upload failed:', err);
           return null;
@@ -615,12 +567,10 @@ export const useStore = create<AppState>()(
         // Optimistic update
         set({ globalSettings: { ...current, ...data, updated_at: new Date().toISOString() } });
 
-        const { error } = await insforge.database
-          .from('global_settings')
-          .update({ ...data, updated_at: new Date().toISOString() })
-          .eq('id', current.id);
-
-        if (error) {
+        if (!isFirebaseConfigured() || !db) return;
+        try {
+          await settingsService.updateGlobalSettings(data);
+        } catch (error) {
           console.error('Failed to update global settings:', error);
           set({ globalSettings: current }); // Rollback
         }
@@ -638,12 +588,10 @@ export const useStore = create<AppState>()(
           ),
         }));
 
-        const { error } = await insforge.database
-          .from('categories')
-          .update({ is_active: newValue })
-          .eq('id', categoryId);
-
-        if (error) {
+        if (!isFirebaseConfigured() || !db) return;
+        try {
+          await updateDoc(doc(db, 'categories', categoryId), { is_active: newValue });
+        } catch (error) {
           set((state) => ({
             categories: state.categories.map(c =>
               c.id === categoryId ? { ...c, is_active: !newValue } : c
@@ -656,6 +604,8 @@ export const useStore = create<AppState>()(
       updateBusinessRule: async (categoryId, minQuantity) => {
         const existing = get().businessRules.find(r => r.category_id === categoryId);
 
+        if (!isFirebaseConfigured() || !db) return;
+
         if (existing) {
           // Optimistic update
           set((state) => ({
@@ -664,28 +614,28 @@ export const useStore = create<AppState>()(
             ),
           }));
 
-          const { error } = await insforge.database
-            .from('business_rules')
-            .update({ min_quantity: minQuantity })
-            .eq('category_id', categoryId);
-
-          if (error) {
+          try {
+            await updateDoc(doc(db, 'business_rules', existing.id || categoryId), { min_quantity: minQuantity });
+          } catch (error) {
             console.error('Failed to update business rule:', error);
             get().fetchBusinessRules();
           }
         } else {
           // Insert new rule
-          const { data, error } = await insforge.database
-            .from('business_rules')
-            .insert({ category_id: categoryId, min_quantity: minQuantity })
-            .select();
-
-          if (error) {
-            console.error('Failed to create business rule:', error);
-          } else if (data && data.length > 0) {
+          try {
+            const newDocRef = await addDoc(collection(db, 'business_rules'), {
+              category_id: categoryId,
+              min_quantity: minQuantity,
+            });
             set((state) => ({
-              businessRules: [...state.businessRules, data[0]],
+              businessRules: [...state.businessRules, {
+                id: newDocRef.id,
+                category_id: categoryId,
+                min_quantity: minQuantity,
+              }],
             }));
+          } catch (error) {
+            console.error('Failed to create business rule:', error);
           }
         }
       },
@@ -693,19 +643,33 @@ export const useStore = create<AppState>()(
       // ── Sauce Management ────────────────────────────────────
 
       fetchAllOptionGroups: async () => {
-        const { data, error: gErr } = await insforge.database
-          .from('product_option_groups')
-          .select('*, options:product_options(*)')
-          .order('sort_order', { ascending: true });
+        if (!isFirebaseConfigured() || !db) {
+          set({ allOptionGroups: Object.values(INITIAL_OPTION_GROUPS_BY_PRODUCT).flat() });
+          return;
+        }
+        try {
+          const groupsSnap = await getDocs(collection(db, 'option_groups'));
+          if (groupsSnap.empty) {
+            set({ allOptionGroups: Object.values(INITIAL_OPTION_GROUPS_BY_PRODUCT).flat() });
+            return;
+          }
 
-        if (gErr || !data) return;
+          const groups: any[] = [];
+          for (const groupDoc of groupsSnap.docs) {
+            const groupData = { id: groupDoc.id, ...groupDoc.data() };
+            const optionsSnap = await getDocs(
+              query(collection(db, 'options'), where('group_id', '==', groupDoc.id))
+            );
+            const options = optionsSnap.docs.map(o => ({ id: o.id, ...o.data() }));
+            options.sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+            groups.push({ ...groupData, options });
+          }
 
-        const enriched = data.map((group: any) => ({
-          ...group,
-          options: (group.options || []).sort((a: any, b: any) => a.sort_order - b.sort_order),
-        }));
-
-        set({ allOptionGroups: enriched });
+          groups.sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+          set({ allOptionGroups: groups });
+        } catch {
+          set({ allOptionGroups: Object.values(INITIAL_OPTION_GROUPS_BY_PRODUCT).flat() });
+        }
       },
 
       toggleOptionActive: async (optionId) => {
@@ -735,12 +699,10 @@ export const useStore = create<AppState>()(
           };
         });
 
-        const { error } = await insforge.database
-          .from('product_options')
-          .update({ is_active: newActive })
-          .eq('id', optionId);
-
-        if (error) {
+        if (!isFirebaseConfigured() || !db) return;
+        try {
+          await updateDoc(doc(db, 'options', optionId), { is_active: newActive });
+        } catch (error) {
           console.error('Failed to toggle option:', error);
           get().fetchAllOptionGroups();
           set({ optionGroupsByProductId: {}, optionGroupLoadingByProductId: {} });
@@ -749,42 +711,41 @@ export const useStore = create<AppState>()(
       },
 
       createOption: async (groupId, data) => {
+        if (!isFirebaseConfigured() || !db) return null;
         const group = get().allOptionGroups.find(g => g.id === groupId);
         const maxSort = Math.max(0, ...(group?.options?.map(o => o.sort_order) || []));
 
-        const { data: rows, error } = await insforge.database
-          .from('product_options')
-          .insert({
+        try {
+          const optionData = {
             group_id: groupId,
             name_ar: data.name_ar,
             price_delta: data.price_delta,
             is_active: true,
             sort_order: maxSort + 1,
-          })
-          .select();
+          };
+          const newDocRef = await addDoc(collection(db, 'options'), optionData);
 
-        if (error || !rows || rows.length === 0) {
+          const newOption = { id: newDocRef.id, ...optionData } as ProductOption;
+          set((state) => ({
+            allOptionGroups: state.allOptionGroups.map(g =>
+              g.id === groupId ? { ...g, options: [...(g.options || []), newOption] } : g
+            ),
+            optionGroupsByProductId: Object.fromEntries(
+              Object.entries(state.optionGroupsByProductId).map(([productId, groups]) => [
+                productId,
+                groups.map(g =>
+                  g.id === groupId ? { ...g, options: [...(g.options || []), newOption] } : g
+                ),
+              ])
+            ),
+          }));
+          return newOption;
+        } catch (error) {
           console.error('Failed to create option:', error);
           get().fetchAllOptionGroups();
           set({ optionGroupsByProductId: {}, optionGroupLoadingByProductId: {} });
           return null;
         }
-
-        const newOption = rows[0] as ProductOption;
-        set((state) => ({
-          allOptionGroups: state.allOptionGroups.map(g =>
-            g.id === groupId ? { ...g, options: [...(g.options || []), newOption] } : g
-          ),
-          optionGroupsByProductId: Object.fromEntries(
-            Object.entries(state.optionGroupsByProductId).map(([productId, groups]) => [
-              productId,
-              groups.map(g =>
-                g.id === groupId ? { ...g, options: [...(g.options || []), newOption] } : g
-              ),
-            ])
-          ),
-        }));
-        return newOption;
       },
 
       updateOption: async (optionId, data) => {
@@ -807,12 +768,10 @@ export const useStore = create<AppState>()(
           ),
         }));
 
-        const { error } = await insforge.database
-          .from('product_options')
-          .update(data)
-          .eq('id', optionId);
-
-        if (error) {
+        if (!isFirebaseConfigured() || !db) return;
+        try {
+          await updateDoc(doc(db, 'options', optionId), data);
+        } catch (error) {
           console.error('Failed to update option:', error);
           get().fetchAllOptionGroups();
           set({ optionGroupsByProductId: {}, optionGroupLoadingByProductId: {} });
@@ -841,12 +800,10 @@ export const useStore = create<AppState>()(
           ),
         }));
 
-        const { error } = await insforge.database
-          .from('product_options')
-          .delete()
-          .eq('id', optionId);
-
-        if (error) {
+        if (!isFirebaseConfigured() || !db) return;
+        try {
+          await deleteDoc(doc(db, 'options', optionId));
+        } catch (error) {
           console.error('Failed to delete option:', error);
           get().fetchAllOptionGroups();
           set({ optionGroupsByProductId: {}, optionGroupLoadingByProductId: {} });
@@ -856,7 +813,7 @@ export const useStore = create<AppState>()(
       },
     }),
     {
-      name: 'sushi-grill-cart',
+      name: 'pochinki-burger-cart',
       partialize: (state) => ({
         cart: state.cart,
         orderType: state.orderType,

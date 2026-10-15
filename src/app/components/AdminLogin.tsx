@@ -1,7 +1,8 @@
 import React, { useState, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Lock, Eye, EyeOff, AlertCircle, Loader2 } from 'lucide-react';
+import { Lock, Eye, EyeOff, AlertCircle, Loader2, Flame } from 'lucide-react';
 import { useAuthStore } from '../store/useAuthStore';
+import { restaurantConfig } from '../../config/restaurant';
 
 export const AdminLogin: React.FC = () => {
     const [username, setUsername] = useState('');
@@ -25,11 +26,15 @@ export const AdminLogin: React.FC = () => {
             <div className="w-full max-w-md">
                 {/* Logo / Brand */}
                 <div className="text-center mb-8">
-                    <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-white p-1 border border-slate-700 shadow-xl mb-6">
-                        <img src="/logo.jpg" alt="Logo" className="w-full h-full object-contain rounded-xl" />
-                    </div>
+                    <img
+                        src={restaurantConfig.brand.logoUrl}
+                        alt={restaurantConfig.brand.nameAr}
+                        className="w-20 h-20 object-contain rounded-2xl bg-[#140606] border-2 border-amber-400 shadow-xl mb-6 mx-auto"
+                    />
                     <h1 className="text-3xl font-black text-white tracking-tighter">لوحة الإدارة</h1>
-                    <p className="text-slate-400 mt-1 text-sm font-medium leading-relaxed max-w-[65ch] mx-auto">سجّل دخولك للمتابعة في سوشي أند جريل</p>
+                    <p className="text-slate-400 mt-1 text-sm font-medium leading-relaxed max-w-[65ch] mx-auto">
+                        سجّل دخولك للمتابعة في {restaurantConfig.brand.nameAr}
+                    </p>
                 </div>
 
                 {/* Login Card */}
@@ -45,17 +50,17 @@ export const AdminLogin: React.FC = () => {
                             </div>
                         )}
 
-                        {/* Username Field */}
+                        {/* Username / Email Field */}
                         <div>
                             <label className="block text-xs font-bold text-slate-400 mb-2 mr-1 uppercase tracking-wider">
-                                اسم المستخدم
+                                اسم المستخدم أو البريد الإلكتروني
                             </label>
                             <input
                                 type="text"
                                 value={username}
                                 onChange={(e) => setUsername(e.target.value)}
-                                className="w-full px-4 py-3.5 bg-slate-950/50 border border-white/5 rounded-2xl text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 transition-all font-medium"
-                                placeholder="أدخل اسم المستخدم"
+                                className="w-full px-4 py-3.5 bg-slate-950/50 border border-white/5 rounded-2xl text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 transition-all font-medium text-left"
+                                placeholder="admin@pochinki.com أو admin"
                                 autoComplete="username"
                                 autoFocus
                                 disabled={isLoading}

@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { X, Clock, Truck, Store, ChefHat, Package, CheckCircle2, CircleDot, Loader2, UtensilsCrossed } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { insforge } from '../../lib/insforge';
+import { doc, getDoc } from 'firebase/firestore';
+import { db, isFirebaseConfigured } from '../../lib/firebase';
 import { useAuthStore } from '../store/useAuthStore';
 import type { OrderItem, OrderStatus } from '../store/useStore';
 import { resolveAllOptionNames } from '../utils/optionNames';
@@ -77,32 +78,40 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, isOpen, onClose, on
     }, [isOpen, orderId]);
 
     const fetchOrder = async () => {
+        if (!orderId || !user || !isFirebaseConfigured() || !db) {
+            setOrder(null);
+            setLoading(false);
+            return;
+        }
         setLoading(true);
         setFetchError(false);
         try {
-            const { data: orderData } = await insforge.database
-                .from('orders')
-                .select('*')
-                .eq('id', orderId!)
-                .eq('user_id', user!.id);
+            const orderSnap = await getDoc(doc(db, 'orders', orderId));
 
-            if (!orderData || orderData.length === 0) {
+            if (!orderSnap.exists()) {
                 setOrder(null);
                 setLoading(false);
                 return;
             }
 
-            const { data: items } = await insforge.database
-                .from('order_items')
-                .select('*')
-                .eq('order_id', orderId!);
+            const orderData = { id: orderSnap.id, ...orderSnap.data() } as any;
 
-            if (items && items.length > 0) {
-                const namesMap = await resolveAllOptionNames(items.map(i => i.selected_option_ids || []));
+            // Verify the order belongs to the current user
+            if (orderData.user_id !== user.id) {
+                setOrder(null);
+                setLoading(false);
+                return;
+            }
+
+            // Items are embedded in the order document
+            const items = orderData.items || [];
+
+            if (items.length > 0) {
+                const namesMap = await resolveAllOptionNames(items.map((i: any) => i.selected_option_ids || []));
                 setOptionNames(namesMap);
             }
 
-            setOrder({ ...orderData[0], items: items || [] });
+            setOrder({ ...orderData, items });
         } catch {
             setFetchError(true);
             setOrder(null);
@@ -228,8 +237,8 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, isOpen, onClose, on
                                                     </div>
                                                     <div className="mr-8 space-y-0.5">
                                                         {item.selected_option_ids && item.selected_option_ids.length > 0 && (
-                                                            <p className="text-[10px] text-slate-400 font-bold">
-                                                                🍟 {item.selected_option_ids.map((id: string) => optionNames.get(id)).filter(Boolean).join('، ')}
+                                                            <p className="text-[10px] text-slate-400 font-medium">
+                                                                إضافات: {item.selected_option_ids.map((id: string) => optionNames.get(id)).filter(Boolean).join('، ')}
                                                             </p>
                                                         )}
                                                         {item.special_instructions && (

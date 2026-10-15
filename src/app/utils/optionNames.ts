@@ -1,26 +1,42 @@
-import { insforge } from '../../lib/insforge';
+import { collection, getDocs, query, where, documentId } from 'firebase/firestore';
+import { db, isFirebaseConfigured } from '../../lib/firebase';
 
 /**
  * Resolves an array of product option IDs to their Arabic names.
- * Fetches from the database to ensure accuracy even if options are not in local cache.
+ * Fetches from Firestore to ensure accuracy even if options are not in local cache.
  */
 export const resolveOptionNames = async (optionIds: string[]): Promise<string[]> => {
     if (!optionIds || optionIds.length === 0) return [];
+    if (!isFirebaseConfigured() || !db) return [];
 
-    const { data, error } = await insforge.database
-        .from('product_options')
-        .select('id, name_ar')
-        .in('id', optionIds);
+    try {
+        // Firestore 'in' queries support max 30 items per batch
+        const batches: string[][] = [];
+        for (let i = 0; i < optionIds.length; i += 30) {
+            batches.push(optionIds.slice(i, i + 30));
+        }
 
-    if (error) {
+        const nameMap = new Map<string, string>();
+
+        for (const batch of batches) {
+            const q = query(
+                collection(db, 'options'),
+                where(documentId(), 'in', batch)
+            );
+            const snapshot = await getDocs(q);
+            snapshot.docs.forEach(doc => {
+                const data = doc.data();
+                if (data.name_ar) {
+                    nameMap.set(doc.id, data.name_ar);
+                }
+            });
+        }
+
+        return optionIds.map(id => nameMap.get(id)).filter(Boolean) as string[];
+    } catch (error) {
         console.error('Error resolving option names:', error);
         return [];
     }
-
-    // Sort back to match request order if possible, or just return names
-    // Usually, comma-separated names don't need strict ordering but consistency is good.
-    const nameMap = new Map((data || []).map(o => [o.id, o.name_ar]));
-    return optionIds.map(id => nameMap.get(id)).filter(Boolean) as string[];
 };
 
 /**
@@ -30,16 +46,34 @@ export const resolveOptionNames = async (optionIds: string[]): Promise<string[]>
 export const resolveAllOptionNames = async (allItemsOptionIds: string[][]): Promise<Map<string, string>> => {
     const uniqueIds = Array.from(new Set(allItemsOptionIds.flat()));
     if (uniqueIds.length === 0) return new Map();
+    if (!isFirebaseConfigured() || !db) return new Map();
 
-    const { data, error } = await insforge.database
-        .from('product_options')
-        .select('id, name_ar')
-        .in('id', uniqueIds);
+    try {
+        const nameMap = new Map<string, string>();
 
-    if (error) {
+        // Firestore 'in' queries support max 30 items per batch
+        const batches: string[][] = [];
+        for (let i = 0; i < uniqueIds.length; i += 30) {
+            batches.push(uniqueIds.slice(i, i + 30));
+        }
+
+        for (const batch of batches) {
+            const q = query(
+                collection(db, 'options'),
+                where(documentId(), 'in', batch)
+            );
+            const snapshot = await getDocs(q);
+            snapshot.docs.forEach(doc => {
+                const data = doc.data();
+                if (data.name_ar) {
+                    nameMap.set(doc.id, data.name_ar);
+                }
+            });
+        }
+
+        return nameMap;
+    } catch (error) {
         console.error('Error resolving multiple option names:', error);
         return new Map();
     }
-
-    return new Map((data || []).map(o => [o.id, o.name_ar]));
 };

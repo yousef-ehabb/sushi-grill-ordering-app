@@ -14,7 +14,8 @@ import { AuthGuard } from './components/auth/AuthGuard';
 import { ActiveOrderModal } from './components/ActiveOrderModal';
 import { useStore } from './store/useStore';
 import { useAuthStore } from './store/useAuthStore';
-import { ShoppingBag, UtensilsCrossed, Phone, XCircle, User, LogIn, ClipboardList } from 'lucide-react';
+import { restaurantConfig } from '../config/restaurant';
+import { ShoppingBag, UtensilsCrossed, Phone, XCircle, User, LogIn, ClipboardList, MapPin, Flame } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -52,7 +53,7 @@ const CustomerLayout: React.FC = () => {
   const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
 
   return (
-    <div className="min-h-screen bg-slate-50 font-['IBM Plex Sans Arabic'] selection:bg-red-100 selection:text-red-900" dir="rtl">
+    <div className="min-h-screen bg-slate-50 font-['Thmanyah_Serif_Display','29LT_Azahar','IBM_Plex_Sans_Arabic',sans-serif] selection:bg-red-100 selection:text-red-900" dir="rtl">
       <Toaster position="top-center" expand={true} richColors theme="light" />
 
       {/* Closed Overlay */}
@@ -75,13 +76,13 @@ const CustomerLayout: React.FC = () => {
               </div>
               <h2 className="text-3xl font-black text-white mb-3">المطعم مغلق</h2>
               <p className="text-slate-300 text-lg leading-relaxed mb-8">
-                {globalSettings?.closed_message || 'المطعم مغلق حالياً ❤️'}
+                {globalSettings?.closed_message || restaurantConfig.ordering.closedMessage}
               </p>
               <div className="inline-flex items-center gap-3">
-                <div className="w-12 h-12 bg-white p-1 rounded-xl shadow-lg">
-                  <img src="/logo.jpg" alt="Logo" className="w-full h-full object-contain rounded-lg" />
+                <div className="w-12 h-12 bg-white p-1 rounded-xl shadow-lg flex items-center justify-center">
+                  <Flame className="w-8 h-8 text-primary fill-primary" />
                 </div>
-                <span className="text-white font-bold text-xl">سوشي أند جريل</span>
+                <span className="text-white font-bold text-xl">{restaurantConfig.brand.nameAr}</span>
               </div>
             </motion.div>
           </motion.div>
@@ -90,92 +91,99 @@ const CustomerLayout: React.FC = () => {
 
       {/* Navbar */}
       <nav
-        className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${isScrolled ? 'bg-white/90 backdrop-blur-md shadow-sm py-2' : 'bg-transparent py-4'
-          }`}
+        className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
+          isScrolled
+            ? 'bg-white/95 backdrop-blur-md shadow-sm py-2.5 px-4 sm:px-6 md:px-8 border-b border-zinc-100'
+            : 'bg-gradient-to-b from-black/90 via-black/50 to-transparent py-3.5 px-4 sm:px-6 md:px-8'
+        }`}
       >
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between">
-          {/* Logo */}
-          <div className="flex items-center gap-4">
-            <div className={`relative transition-all duration-300 ${isScrolled ? 'w-10 h-10' : 'w-14 h-14'} bg-white rounded-2xl shadow-lg p-1`}>
-              <img src="/logo.jpg" alt="Sushi & Grill" className="w-full h-full object-contain rounded-xl" />
-            </div>
-            <div className={`flex flex-col gap-1 ${isScrolled ? 'opacity-100' : 'text-white drop-shadow-lg'}`}>
-              <span className={`font-black tracking-tighter leading-none transition-all duration-300 ${isScrolled ? 'text-slate-900 text-xl' : 'text-white text-3xl'}`}>سوشي أند جريل</span>
-              <span className={`text-sm font-medium tracking-wide ${isScrolled ? 'text-slate-500' : 'text-white/90'}`}>المذاق الأصلي</span>
-            </div>
-          </div>
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
+          {/* Logo - Clearly visible, sharp, no awkward circular clip */}
+          <Link
+            to="/"
+            onClick={() => {
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            className="flex items-center group transition-transform active:scale-95 focus:outline-none py-0.5"
+            aria-label={restaurantConfig.brand.nameAr}
+          >
+            <img
+              src={restaurantConfig.brand.logoUrl}
+              alt={restaurantConfig.brand.nameAr}
+              className="h-10 md:h-12 w-auto object-contain transition-transform group-hover:scale-105 drop-shadow-md"
+            />
+          </Link>
 
-          {/* Actions */}
-          <div className="flex items-center gap-2 md:gap-3">
+          {/* Actions - Clean spacing for cart, account, phone */}
+          <div className="flex items-center gap-2.5 sm:gap-3.5">
+            {/* Phone Button */}
             <a
-              href="tel:01141638005"
-              className={`flex items-center justify-center w-10 h-10 rounded-full transition-all ${isScrolled
-                ? 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                : 'bg-white/20 text-white hover:bg-white/30 backdrop-blur-sm border border-white/20'
-                }`}
+              href={`tel:${restaurantConfig.contact.primaryPhone}`}
+              className={`flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-xl transition-all ${
+                isScrolled
+                  ? 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'
+                  : 'bg-white/15 text-white hover:bg-white/25 backdrop-blur-sm border border-white/15'
+              }`}
               aria-label="اتصل بنا"
             >
-              <Phone className="w-4 h-4" />
+              <Phone className="w-4 h-4 text-amber-400" />
             </a>
+
+            {/* Active Order Pill if active */}
+            {isAuthenticated && activeOrder && (
+              <button
+                onClick={() => setIsActiveOrderOpen(true)}
+                className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-xs transition-all ${
+                  isScrolled
+                    ? 'bg-amber-50 text-amber-900 border border-amber-200'
+                    : 'bg-amber-400/20 text-amber-300 border border-amber-400/40 backdrop-blur-md'
+                }`}
+                aria-label="متابعة طلبي"
+              >
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                </span>
+                <span className="hidden sm:inline">طلبك نشط</span>
+              </button>
+            )}
 
             {/* Auth Button */}
             {isAuthenticated ? (
               <Link
                 to="/account"
-                className={`flex items-center gap-2 font-bold text-sm px-4 py-2.5 rounded-full transition-all ${isScrolled
-                  ? 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                  : 'bg-white/20 text-white hover:bg-white/30 backdrop-blur-sm border border-white/20'
-                  }`}
+                className={`flex items-center gap-1.5 font-bold text-xs sm:text-sm h-9 px-3 sm:h-10 sm:px-3.5 rounded-xl transition-all ${
+                  isScrolled
+                    ? 'bg-zinc-100 text-zinc-800 hover:bg-zinc-200'
+                    : 'bg-white/15 text-white hover:bg-white/25 backdrop-blur-sm border border-white/15'
+                }`}
+                aria-label="حسابي"
               >
                 <User className="w-4 h-4" />
-                <span className="hidden md:inline max-w-[80px] truncate">{user?.name?.split(' ')[0] || 'حسابي'}</span>
+                <span className="hidden sm:inline">{user?.name?.split(' ')[0] || 'حسابي'}</span>
               </Link>
             ) : (
               <Link
                 to="/login"
-                className={`flex items-center gap-2 font-bold text-sm px-4 py-2.5 rounded-full transition-all ${isScrolled
-                  ? 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                  : 'bg-white/20 text-white hover:bg-white/30 backdrop-blur-sm border border-white/20'
-                  }`}
+                className={`flex items-center gap-1.5 font-bold text-xs sm:text-sm h-9 px-3 sm:h-10 sm:px-3.5 rounded-xl transition-all ${
+                  isScrolled
+                    ? 'bg-zinc-100 text-zinc-800 hover:bg-zinc-200'
+                    : 'bg-white/15 text-white hover:bg-white/25 backdrop-blur-sm border border-white/15'
+                }`}
+                aria-label="تسجيل الدخول"
               >
                 <LogIn className="w-4 h-4" />
-                <span className="hidden md:inline">دخول</span>
+                <span className="hidden sm:inline">دخول</span>
               </Link>
             )}
 
-            {/* My Orders Icon */}
-            {isAuthenticated && (
-              <button
-                onClick={() => setIsActiveOrderOpen(true)}
-                className={`relative flex items-center justify-center w-10 h-10 rounded-full transition-all ${isScrolled
-                  ? 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                  : 'bg-white/20 text-white hover:bg-white/30 backdrop-blur-sm border border-white/20'
-                  }`}
-                aria-label="طلباتي"
-              >
-                <ClipboardList className="w-4.5 h-4.5" />
-                <AnimatePresence>
-                  {activeOrder && (
-                    <motion.span
-                      initial={{ scale: 0 }}
-                      animate={{ scale: 1 }}
-                      exit={{ scale: 0 }}
-                      className={`absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white ${activeOrder.status === 'new' ? 'bg-blue-500'
-                        : activeOrder.status === 'preparing' ? 'bg-amber-500'
-                          : activeOrder.status === 'ready' ? 'bg-emerald-500'
-                            : 'bg-purple-500'
-                        }`}
-                    />
-                  )}
-                </AnimatePresence>
-              </button>
-            )}
-
+            {/* Cart Button */}
             <button
               onClick={() => setIsCartOpen(true)}
-              className="relative group bg-primary hover:bg-red-700 text-white p-3 rounded-full shadow-lg shadow-red-500/20 transition-all active:scale-95"
+              className="relative group bg-red-600 hover:bg-red-700 text-white w-9 h-9 sm:w-10 sm:h-10 md:w-11 md:h-11 rounded-xl flex items-center justify-center shadow-lg shadow-red-600/30 transition-all active:scale-95"
+              aria-label="سلة المشتريات"
             >
-              <ShoppingBag className="w-5 h-5 group-hover:scale-110 transition-transform" />
+              <ShoppingBag className="w-4.5 h-4.5 sm:w-5 sm:h-5 group-hover:scale-110 transition-transform" />
               <AnimatePresence>
                 {totalItems > 0 && (
                   <motion.span
@@ -183,7 +191,7 @@ const CustomerLayout: React.FC = () => {
                     animate={{ scale: 1 }}
                     exit={{ scale: 0 }}
                     key={totalItems}
-                    className="absolute -top-1 -right-1 bg-slate-900 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center border-2 border-white shadow-sm"
+                    className="absolute -top-1.5 -right-1.5 bg-zinc-950 text-white text-[10px] sm:text-[11px] font-black w-5 h-5 rounded-full flex items-center justify-center border-2 border-white shadow-xs"
                   >
                     {totalItems}
                   </motion.span>
@@ -194,92 +202,163 @@ const CustomerLayout: React.FC = () => {
         </div>
       </nav>
 
-      {/* Hero Section */}
-      <div className="relative h-[60vh] md:h-[70vh] w-full overflow-hidden bg-slate-900">
-        <div className="absolute inset-0">
+      {/* Spacious & Cinematic Hero Section */}
+      <div className="relative w-full overflow-hidden min-h-[55vh] py-16 md:py-24 flex flex-col justify-center items-center text-center pt-28 pb-16 sm:pt-32 sm:pb-20">
+        {/* Real Restaurant Photo with Rich Cinematic Vignette */}
+        <div className="absolute inset-0 pointer-events-none">
           <img
-            src="/hero-1.png"
-            alt="Sushi Platters"
-            className="w-full h-full object-cover object-center opacity-60 scale-105 animate-[kenburns_20s_infinite_alternate]"
+            src={restaurantConfig.brand.heroImageUrl}
+            alt={restaurantConfig.brand.nameAr}
+            className="w-full h-full object-cover object-center"
           />
-          <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/40 to-transparent" />
+          {/* Deep crimson and dark tone blend */}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-red-950/75 to-black/80" />
         </div>
 
-        <div className="relative h-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col justify-end pb-16 md:pb-24">
+        <div className="relative w-full max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col items-center justify-center text-center">
           <motion.div
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.8 }}
-            className="max-w-3xl"
+            transition={{ duration: 0.5 }}
+            className="flex flex-col items-center max-w-2xl mx-auto"
           >
+            {/* Status Badge with subtle glow */}
             {isOpen && (
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-red-500/20 border border-red-500/30 text-red-200 text-sm font-medium mb-4 backdrop-blur-sm">
-                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                مفتوح الآن للطلبات
+              <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-black/40 border border-white/20 text-white text-xs sm:text-sm font-semibold mb-2 backdrop-blur-md shadow-sm">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
+                </span>
+                <span>مفتوح الآن للطلبات والتوصيل السريع</span>
               </div>
             )}
-            <h1 className="text-4xl md:text-6xl lg:text-7xl font-bold text-white mb-4 leading-tight">
-              طعم <span className="text-primary">السوشي</span> الحقيقي<br />
-              والمشويات المميزة
+
+            {/* Brand Title */}
+            <h1 className="text-3xl sm:text-4xl md:text-5xl font-black text-white my-3 tracking-tight leading-tight drop-shadow-[0_4px_16px_rgba(0,0,0,0.85)]">
+              {restaurantConfig.brand.nameAr}
             </h1>
-            <p className="text-slate-300 text-lg md:text-xl mb-8 max-w-xl leading-relaxed">
-              استمتع بأشهى أطباق السوشي والمشويات المحضرة يومياً من أجود المكونات الطازجة. اطلب الآن واكتشف المذاق الفريد.
+
+            {/* Subtitle */}
+            <p className="text-stone-200 text-xs sm:text-base md:text-lg mb-6 sm:mb-8 max-w-lg md:max-w-2xl mx-auto font-medium leading-relaxed drop-shadow-md">
+              لحم بلدي طازج يومياً وقطع دجاج مقرمشة بتتبيلات وخلطات بوشنكي الخاصة
             </p>
-            <div className="flex flex-wrap gap-4">
+
+            {/* Action Buttons */}
+            <div className="flex flex-row items-center justify-center gap-3 w-full max-w-sm sm:max-w-md mx-auto">
               <button
-                onClick={() => document.getElementById('menu')?.scrollIntoView({ behavior: 'smooth' })}
-                className="bg-primary hover:bg-red-700 text-white px-8 py-3.5 rounded-xl font-bold text-lg shadow-xl shadow-red-600/20 transition-all hover:-translate-y-1 active:scale-95 flex items-center gap-2"
+                onClick={() => {
+                  const menuElem = document.getElementById('menu');
+                  if (menuElem) {
+                    const isMobile = window.innerWidth < 768;
+                    const offset = isMobile ? 65 : 85;
+                    const top = menuElem.getBoundingClientRect().top + window.scrollY - offset;
+                    window.scrollTo({ top, behavior: 'smooth' });
+                  }
+                }}
+                className="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-xl shadow-lg shadow-red-950/60 transition-all hover:-translate-y-0.5 active:scale-95 flex items-center justify-center gap-2 border border-red-500/40 group text-sm sm:text-base"
               >
-                <UtensilsCrossed className="w-5 h-5" />
-                تصفح المنيو
+                <UtensilsCrossed className="w-4 h-4 text-white group-hover:rotate-12 transition-transform" />
+                <span>اطلب الآن من المنيو</span>
               </button>
+
               <a
-                href="tel:01141638005"
-                className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/20 px-8 py-3.5 rounded-xl font-bold text-lg transition-all hover:-translate-y-1 active:scale-95"
+                href={`tel:${restaurantConfig.contact.primaryPhone}`}
+                className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/25 hover:border-white/40 py-3 px-6 rounded-xl font-bold text-xs sm:text-sm transition-all hover:-translate-y-0.5 active:scale-95 flex items-center justify-center gap-2 shadow-sm group"
               >
-                اتصل بنا
+                <Phone className="w-4 h-4 text-stone-300 group-hover:text-white transition-colors" />
+                <span>اتصل بنا</span>
               </a>
             </div>
           </motion.div>
         </div>
       </div>
 
-      {/* Main Content */}
-      <main id="menu" className="relative z-10 -mt-8">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <CustomerView />
-        </div>
+      {/* Main Content - Curved Sheet Transition */}
+      <main
+        id="menu"
+        className="rounded-t-[2.5rem] bg-white -mt-8 relative z-10 pt-6 px-4 shadow-xl"
+      >
+        <CustomerView />
       </main>
 
       {/* Footer */}
       <footer className="bg-slate-950 text-slate-300 py-16 px-4 mt-20 border-t border-slate-900">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-12 items-center text-center md:text-right">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-12 text-right">
+            {/* Brand Column */}
             <div className="space-y-4">
               <div className="inline-flex items-center gap-3">
-                <div className="w-12 h-12 bg-white p-1 rounded-xl shadow-lg">
-                  <img src="/logo.jpg" alt="Logo" className="w-full h-full object-contain rounded-lg" />
+                <img
+                  src={restaurantConfig.brand.logoUrl}
+                  alt={restaurantConfig.brand.nameAr}
+                  className="w-12 h-12 object-contain rounded-2xl shadow-lg border-2 border-amber-400 bg-[#140606]"
+                />
+                <div>
+                  <h3 className="text-2xl font-black text-white">{restaurantConfig.brand.nameAr}</h3>
+                  <span className="text-xs font-bold text-amber-400">{restaurantConfig.brand.taglineAr}</span>
                 </div>
-                <span className="text-2xl font-bold text-white">سوشي أند جريل</span>
               </div>
-              <p className="text-sm leading-relaxed max-w-xs mx-auto md:mx-0">
-                نقدم لكم أجود أنواع السوشي والمأكولات البحرية. جودة عالمية وطعم لا يقاوم في كل قطعة.
+              <p className="text-sm text-slate-400 leading-relaxed max-w-sm">
+                ساندوتشات برجر اللحم البلدي الطازج وقطع الفرايد تشيكن المقرمشة المحضرة بأعلى معايير الجودة والنظافة.
               </p>
-            </div>
-
-            <div className="space-y-4">
-              <h3 className="text-white font-bold text-lg">تواصل معنا</h3>
-              <div className="flex flex-col gap-2 items-center md:items-start text-sm">
-                <span className="hover:text-primary transition-colors cursor-pointer">01141638005</span>
-                <span className="hover:text-primary transition-colors cursor-pointer">info@sushiandgrill.com</span>
-                <span>يومياً من 12 ظهراً حتى 12 منتصف الليل</span>
+              <div className="flex items-center gap-3 pt-2">
+                <a
+                  href={restaurantConfig.social.instagramUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="bg-slate-900 hover:bg-primary text-slate-300 hover:text-white px-3 py-1.5 rounded-xl text-xs font-bold transition-all border border-slate-800"
+                >
+                  Instagram: @{restaurantConfig.social.instagram}
+                </a>
+                <a
+                  href={restaurantConfig.social.facebookUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="bg-slate-900 hover:bg-primary text-slate-300 hover:text-white px-3 py-1.5 rounded-xl text-xs font-bold transition-all border border-slate-800"
+                >
+                  Facebook: {restaurantConfig.social.facebook}
+                </a>
               </div>
             </div>
 
-            <div className="flex flex-col items-center md:items-end gap-4">
-              <a href="#" className="text-sm font-medium hover:text-white transition-colors">سياسة الخصوصية</a>
-              <a href="#" className="text-sm font-medium hover:text-white transition-colors">الشروط والأحكام</a>
-              <span className="text-xs text-slate-500 mt-4">&copy; {new Date().getFullYear()} جميع الحقوق محفوظة.</span>
+            {/* Branches & Phone Numbers */}
+            <div className="space-y-4">
+              <h3 className="text-white font-bold text-lg flex items-center gap-2">
+                <MapPin className="w-5 h-5 text-primary" />
+                فروعنا وأرقام الطلبات
+              </h3>
+              <div className="space-y-3 text-sm">
+                {restaurantConfig.contact.branches.map((branch) => (
+                  <div key={branch.id} className="bg-slate-900/60 p-3 rounded-xl border border-slate-800/80">
+                    <span className="font-bold text-amber-400 block mb-1">{branch.name_ar}</span>
+                    <div className="flex flex-wrap gap-2">
+                      {branch.phones.map((phone) => (
+                        <a
+                          key={phone}
+                          href={`tel:${phone}`}
+                          className="text-slate-300 hover:text-primary transition-colors font-mono font-medium dir-ltr"
+                        >
+                          {phone}
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Working Hours & Policies */}
+            <div className="flex flex-col justify-between space-y-4">
+              <div>
+                <h3 className="text-white font-bold text-lg mb-2">مواعيد العمل</h3>
+                <p className="text-sm text-slate-400 leading-relaxed">
+                  يومياً من 12:00 ظهراً حتى 02:00 صباحاً.<br />
+                  خدمة التوصيل والاستلام متوفرة طوال ساعات العمل.
+                </p>
+              </div>
+              <div className="border-t border-slate-900 pt-4 text-xs text-slate-500">
+                &copy; {new Date().getFullYear()} {restaurantConfig.brand.nameAr}. جميع الحقوق محفوظة.
+              </div>
             </div>
           </div>
         </div>

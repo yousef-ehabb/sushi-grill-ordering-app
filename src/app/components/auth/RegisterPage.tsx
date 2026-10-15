@@ -3,7 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/useAuthStore';
 import { PhoneInput } from '../ui/PhoneInput';
 import { validateEmail } from '../../../lib/phoneUtils';
-import { ArrowLeft, Eye, EyeOff, Loader2, User, Mail, Lock, MapPin, UtensilsCrossed, ShieldCheck, RotateCcw } from 'lucide-react';
+import { ArrowLeft, Eye, EyeOff, Loader2, User, Mail, Lock, MapPin, UtensilsCrossed, ShieldCheck, RotateCcw, Flame } from 'lucide-react';
+import { restaurantConfig } from '../../../config/restaurant';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -84,9 +85,9 @@ export const RegisterPage: React.FC = () => {
             setRegisteredEmail(result.email);
             setStep('verify');
             setResendCooldown(60);
-            toast.success('تم إرسال رمز التحقق إلى بريدك الإلكتروني 📧');
+            toast.success('تم إرسال رمز التحقق إلى بريدك الإلكتروني');
         } else if (result.success) {
-            toast.success('تم إنشاء حسابك بنجاح! 🎉');
+            toast.success('تم إنشاء حسابك بنجاح');
             navigate('/');
         } else {
             toast.error(result.error || 'فشل إنشاء الحساب');
@@ -130,7 +131,7 @@ export const RegisterPage: React.FC = () => {
         const result = await verifyEmail(registeredEmail, code);
 
         if (result.success) {
-            toast.success('تم تأكيد حسابك بنجاح! مرحباً بك 🎉');
+            toast.success('تم تأكيد حسابك بنجاح');
             navigate('/');
         } else {
             toast.error(result.error || 'رمز التحقق غير صحيح');
@@ -143,7 +144,7 @@ export const RegisterPage: React.FC = () => {
         if (resendCooldown > 0) return;
         const result = await resendVerification(registeredEmail);
         if (result.success) {
-            toast.success('تم إعادة إرسال رمز التحقق 📧');
+            toast.success('تم إعادة إرسال رمز التحقق');
             setResendCooldown(60);
         } else {
             toast.error(result.error || 'فشل إعادة الإرسال');
@@ -164,10 +165,12 @@ export const RegisterPage: React.FC = () => {
                 {/* Logo Header */}
                 <div className="text-center mb-8">
                     <Link to="/" className="inline-flex items-center gap-3 mb-6">
-                        <div className="w-12 h-12 bg-white rounded-2xl shadow-lg p-1">
-                            <img src="/logo.jpg" alt="Sushi & Grill" className="w-full h-full object-contain rounded-xl" />
-                        </div>
-                        <span className="font-black text-2xl text-slate-900">سوشي أند جريل</span>
+                        <img
+                            src={restaurantConfig.brand.logoUrl}
+                            alt={restaurantConfig.brand.nameAr}
+                            className="w-12 h-12 object-contain rounded-2xl shadow-lg border-2 border-amber-400 bg-[#140606]"
+                        />
+                        <span className="font-black text-2xl text-slate-900">{restaurantConfig.brand.nameAr}</span>
                     </Link>
                     <h1 className="text-2xl font-black text-slate-900 mb-2">
                         {step === 'register' ? 'إنشاء حساب جديد' : 'تأكيد البريد الإلكتروني'}

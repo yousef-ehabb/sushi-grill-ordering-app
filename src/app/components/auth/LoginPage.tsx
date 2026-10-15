@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/useAuthStore';
 import { validateEmail } from '../../../lib/phoneUtils';
-import { ArrowLeft, Eye, EyeOff, Loader2, Mail, Lock, UtensilsCrossed } from 'lucide-react';
+import { ArrowLeft, Eye, EyeOff, Loader2, Mail, Lock, UtensilsCrossed, Flame } from 'lucide-react';
+import { restaurantConfig } from '../../../config/restaurant';
 import { toast } from 'sonner';
 import { motion } from 'motion/react';
 
@@ -41,7 +42,7 @@ export const LoginPage: React.FC = () => {
             const result = await signIn(form.email, form.password);
 
             if (result.success) {
-                toast.success('تم تسجيل الدخول بنجاح! 🎉');
+                toast.success('تم تسجيل الدخول بنجاح');
                 navigate('/');
             } else {
                 toast.error(result.error || 'فشل تسجيل الدخول');
@@ -65,10 +66,12 @@ export const LoginPage: React.FC = () => {
                 {/* Logo Header */}
                 <div className="text-center mb-8">
                     <Link to="/" className="inline-flex items-center gap-3 mb-6">
-                        <div className="w-12 h-12 bg-white rounded-2xl shadow-lg p-1">
-                            <img src="/logo.jpg" alt="Sushi & Grill" className="w-full h-full object-contain rounded-xl" />
-                        </div>
-                        <span className="font-black text-2xl text-slate-900">سوشي أند جريل</span>
+                        <img
+                            src={restaurantConfig.brand.logoUrl}
+                            alt={restaurantConfig.brand.nameAr}
+                            className="w-12 h-12 object-contain rounded-2xl shadow-lg border-2 border-amber-400 bg-[#140606]"
+                        />
+                        <span className="font-black text-2xl text-slate-900">{restaurantConfig.brand.nameAr}</span>
                     </Link>
                     <h1 className="text-2xl font-black text-slate-900 mb-2">تسجيل الدخول</h1>
                     <p className="text-slate-500 text-sm">أدخل بياناتك للوصول لحسابك ومتابعة طلباتك</p>

@@ -1,6 +1,8 @@
 node_modules
 dist
 .env
+.env.local
+.env.*.local
 .DS_Store
 coverage
 .vscode
@@ -8,3 +10,7 @@ coverage
 *.log
 opencode.json
 opencode.local.json
+.vercel
+*.zip
+public/*.zip
+public/cropper.*

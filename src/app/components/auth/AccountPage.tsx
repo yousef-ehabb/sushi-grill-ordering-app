@@ -6,7 +6,8 @@ import { PhoneInput } from '../ui/PhoneInput';
 import { User, Mail, MapPin, Package, LogOut, Save, Loader2, ArrowLeft, CheckCircle2, Clock, Truck, Store, UtensilsCrossed, ChevronLeft } from 'lucide-react';
 import { toast } from 'sonner';
 import { motion } from 'motion/react';
-import { insforge } from '../../../lib/insforge';
+import { collection, getDocs, query, where, orderBy } from 'firebase/firestore';
+import { db, isFirebaseConfigured } from '../../../lib/firebase';
 import { formatPhoneDisplay } from '../../../lib/phoneUtils';
 
 interface Order {
@@ -51,26 +52,32 @@ export const AccountPage: React.FC = () => {
     }, [activeTab, user]);
 
     const fetchOrders = async () => {
-        if (!user) return;
+        if (!user || !isFirebaseConfigured() || !db) return;
         setOrdersLoading(true);
         try {
-            const { data, error } = await insforge.database
-                .from('orders')
-                .select('*')
-                .eq('user_id', user.id)
-                .order('created_at', { ascending: false });
+            const ordersQuery = query(
+                collection(db, 'orders'),
+                where('user_id', '==', user.id)
+            );
+            const snapshot = await getDocs(ordersQuery);
 
-            if (!error && data) {
-                const ordersWithItems: Order[] = await Promise.all(
-                    data.map(async (order: any) => {
-                        const { data: items } = await insforge.database
-                            .from('order_items')
-                            .select('*')
-                            .eq('order_id', order.id);
-                        return { ...order, items: items || [] };
-                    })
-                );
+            if (!snapshot.empty) {
+                const ordersData = snapshot.docs.map(docSnap => ({
+                    id: docSnap.id,
+                    ...docSnap.data(),
+                })) as any[];
+
+                // Sort by created_at descending (in JS to avoid composite index)
+                ordersData.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+                // Each order document has items embedded as an array
+                const ordersWithItems: Order[] = ordersData.map(order => ({
+                    ...order,
+                    items: order.items || [],
+                }));
                 setOrders(ordersWithItems);
+            } else {
+                setOrders([]);
             }
         } catch {
             // silent fail

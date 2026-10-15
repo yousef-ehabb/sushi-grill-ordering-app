@@ -5,7 +5,8 @@ import { useAuthStore } from '../../store/useAuthStore';
 import { ArrowRight, Clock, Truck, Store, MapPin, Phone, User, RefreshCw, Loader2, CheckCircle2, ChefHat, Package, CircleDot } from 'lucide-react';
 import { toast } from 'sonner';
 import { motion } from 'motion/react';
-import { insforge } from '../../../lib/insforge';
+import { doc, getDoc } from 'firebase/firestore';
+import { db, isFirebaseConfigured } from '../../../lib/firebase';
 import { resolveAllOptionNames } from '../../utils/optionNames';
 
 interface OrderDetail {
@@ -76,31 +77,34 @@ export const OrderDetailPage: React.FC = () => {
     }, [orderId, user]);
 
     const fetchOrderDetail = async () => {
-        if (!orderId || !user) return;
+        if (!orderId || !user || !isFirebaseConfigured() || !db) return;
         setLoading(true);
         try {
-            const { data: orderData, error: orderError } = await insforge.database
-                .from('orders')
-                .select('*')
-                .eq('id', orderId)
-                .eq('user_id', user.id);
+            const orderRef = doc(db, 'orders', orderId);
+            const orderSnap = await getDoc(orderRef);
 
-            if (orderError || !orderData || orderData.length === 0) {
+            if (!orderSnap.exists()) {
                 navigate('/account', { replace: true });
                 return;
             }
 
-            const { data: items } = await insforge.database
-                .from('order_items')
-                .select('*')
-                .eq('order_id', orderId);
+            const orderData = { id: orderSnap.id, ...orderSnap.data() } as any;
 
-            if (items && items.length > 0) {
-                const namesMap = await resolveAllOptionNames(items.map(i => i.selected_option_ids || []));
+            // Verify this order belongs to the current user
+            if (orderData.user_id !== user.id) {
+                navigate('/account', { replace: true });
+                return;
+            }
+
+            // Items are embedded in the order document
+            const items = orderData.items || [];
+
+            if (items.length > 0) {
+                const namesMap = await resolveAllOptionNames(items.map((i: any) => i.selected_option_ids || []));
                 setOptionNames(namesMap);
             }
 
-            setOrder({ ...orderData[0], items: items || [] });
+            setOrder({ ...orderData, items });
         } catch {
             toast.error('فشل تحميل تفاصيل الطلب');
             navigate('/account', { replace: true });
@@ -239,8 +243,8 @@ export const OrderDetailPage: React.FC = () => {
                                     </div>
                                     <div className="mr-8 space-y-0.5 mt-0.5">
                                         {item.selected_option_ids && item.selected_option_ids.length > 0 && (
-                                            <p className="text-[10px] text-slate-400 font-bold">
-                                                🍟 {item.selected_option_ids.map((id: string) => optionNames.get(id)).filter(Boolean).join('، ')}
+                                            <p className="text-[10px] text-slate-400 font-medium">
+                                                إضافات: {item.selected_option_ids.map((id: string) => optionNames.get(id)).filter(Boolean).join('، ')}
                                             </p>
                                         )}
                                         {item.special_instructions && (

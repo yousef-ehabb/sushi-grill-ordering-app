@@ -1,5 +1,15 @@
 import { create } from 'zustand';
-import { insforge } from '../../lib/insforge';
+import {
+    createUserWithEmailAndPassword,
+    signInWithEmailAndPassword,
+    signOut as firebaseSignOut,
+    onAuthStateChanged,
+    updateProfile as firebaseUpdateProfile,
+    sendEmailVerification,
+    type User as FirebaseUser
+} from 'firebase/auth';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { auth, db, isFirebaseConfigured } from '../../lib/firebase';
 import { normalizePhone, validateEgyptianPhone, validateEmail } from '../../lib/phoneUtils';
 
 interface UserProfile {
@@ -47,23 +57,49 @@ interface SignUpData {
     address?: string;
 }
 
-function mapUser(authUser: any): UserProfile {
-    return {
-        id: authUser.id,
-        email: authUser.email,
-        name: authUser.profile?.name || '',
-        phone: authUser.profile?.phone || '',
-        address: authUser.profile?.address || '',
-        avatar_url: authUser.profile?.avatar_url || null,
+async function loadUserProfile(fbUser: FirebaseUser): Promise<UserProfile> {
+    const profile: UserProfile = {
+        id: fbUser.uid,
+        email: fbUser.email || '',
+        name: fbUser.displayName || '',
+        phone: '',
+        address: '',
+        avatar_url: fbUser.photoURL || null,
     };
+
+    if (isFirebaseConfigured() && db) {
+        try {
+            const profileDoc = await getDoc(doc(db, 'user_profiles', fbUser.uid));
+            if (profileDoc.exists()) {
+                const data = profileDoc.data();
+                profile.name = data.name || profile.name;
+                profile.phone = data.phone || '';
+                profile.address = data.address || '';
+                profile.avatar_url = data.avatar_url || profile.avatar_url;
+            }
+        } catch (e) {
+            console.warn('[Firebase Auth] Error loading user profile:', e);
+        }
+    }
+
+    return profile;
 }
-function buildSessionState(authUser: any, isAdmin: boolean) {
-    return {
-        user: mapUser(authUser),
-        isAuthenticated: !isAdmin,
-        isAdmin,
-        isLoading: false,
-    };
+
+async function checkIsFirebaseAdmin(fbUser: FirebaseUser): Promise<boolean> {
+    if (fbUser.email?.toLowerCase() === 'admin@pochinki.com') {
+        return true;
+    }
+    if (isFirebaseConfigured() && db) {
+        try {
+            const adminDoc = await getDoc(doc(db, 'admins', fbUser.uid));
+            if (adminDoc.exists()) {
+                return true;
+            }
+        } catch (e) {
+            console.warn('[Firebase Auth] Error checking admins doc:', e);
+        }
+    }
+    return false;
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -81,60 +117,99 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     login: async (username: string, password: string) => {
         set({ isLoading: true, error: null });
 
-        try {
-            // Look up admin username to get their email
-            const { data: adminRows, error: lookupError } = await insforge.database
-                .from('admin_users')
-                .select()
-                .eq('username', username.trim());
+        const trimmed = username.trim();
 
-            if (lookupError || !adminRows || adminRows.length === 0) {
-                set({ isLoading: false, error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
-                return false;
-            }
-
-            const adminEmail = adminRows[0].email;
-
-            // Sign in with the admin's email + provided password
-            const { data, error: signInError } = await insforge.auth.signInWithPassword({
-                email: adminEmail,
-                password,
-            });
-
-            if (signInError || !data?.user) {
-                set({ isLoading: false, error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
-                return false;
-            }
-
-            set(buildSessionState(data.user, true));
-            return true;
-        } catch {
-            set({ isLoading: false, error: 'حدث خطأ أثناء تسجيل الدخول' });
+        if (!isFirebaseConfigured() || !auth) {
+            set({ isLoading: false, error: 'Firebase غير مهيأ' });
             return false;
         }
+
+        const email = trimmed.toLowerCase() === 'admin'
+            ? 'admin@pochinki.com'
+            : trimmed.includes('@')
+                ? trimmed.toLowerCase()
+                : `${trimmed}@pochinki.com`;
+
+        try {
+            const cred = await signInWithEmailAndPassword(auth, email, password);
+            if (cred.user) {
+                const isAdminUser = await checkIsFirebaseAdmin(cred.user);
+                if (isAdminUser) {
+                    set({
+                        user: {
+                            id: cred.user.uid,
+                            email: cred.user.email || email,
+                            name: cred.user.displayName || 'مدير النظام (بوشنكي)',
+                            phone: '',
+                            address: '',
+                            avatar_url: null,
+                        },
+                        isAuthenticated: false,
+                        isAdmin: true,
+                        isLoading: false,
+                        error: null,
+                    });
+                    return true;
+                } else {
+                    await firebaseSignOut(auth);
+                    set({ isLoading: false, error: 'هذا الحساب ليس لديه صلاحيات الإدارة' });
+                    return false;
+                }
+            }
+        } catch (fbErr: any) {
+            console.warn('[Firebase Auth] Admin login check failed:', fbErr.code || fbErr.message);
+            if (fbErr.code === 'auth/wrong-password' || fbErr.code === 'auth/invalid-credential') {
+                set({ isLoading: false, error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
+                return false;
+            }
+        }
+
+        set({ isLoading: false, error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
+        return false;
     },
 
     checkSession: async () => {
         set({ isLoading: true });
-        try {
-            const { data } = await insforge.auth.getCurrentSession();
-            const authUser = data?.session?.user;
 
-            if (!authUser) {
-                set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false });
+        if (!isFirebaseConfigured() || !auth) {
+            set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false });
+            return;
+        }
+
+        const currentUser = auth.currentUser;
+        if (currentUser) {
+            const isAdminUser = await checkIsFirebaseAdmin(currentUser);
+            if (isAdminUser) {
+                set({
+                    user: {
+                        id: currentUser.uid,
+                        email: currentUser.email || '',
+                        name: currentUser.displayName || 'مدير النظام (بوشنكي)',
+                        phone: '',
+                        address: '',
+                        avatar_url: null,
+                    },
+                    isAuthenticated: false,
+                    isAdmin: true,
+                    isLoading: false,
+                });
                 return;
             }
 
-            // Check if user exists in admin_users table
-            const { data: adminRows } = await insforge.database
-                .from('admin_users')
-                .select()
-                .eq('user_id', authUser.id);
+            // Regular user
+            const profile = await loadUserProfile(currentUser);
+            set({
+                user: profile,
+                isAuthenticated: true,
+                isAdmin: false,
+                isLoading: false,
+            });
+            return;
+        }
 
-            const isAdminUser = !!(adminRows && adminRows.length > 0);
-            set(buildSessionState(authUser, isAdminUser));
-        } catch {
-            // Network error — don't destroy a valid session
+        if (!get().isAdmin) {
+            set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false });
+        } else {
             set({ isLoading: false });
         }
     },
@@ -142,29 +217,56 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     initSession: async () => {
         try {
             set({ isLoading: true });
-            const { data } = await insforge.auth.getCurrentSession();
-            const authUser = data?.session?.user;
 
-            if (authUser) {
-                // Check if this session belongs to an admin
-                const { data: adminRows } = await insforge.database
-                    .from('admin_users')
-                    .select()
-                    .eq('user_id', authUser.id);
-
-                const isAdminUser = !!(adminRows && adminRows.length > 0);
-                set(buildSessionState(authUser, isAdminUser));
-            } else {
+            if (!isFirebaseConfigured() || !auth) {
                 set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false });
+                return;
             }
+
+            onAuthStateChanged(auth, async (fbUser) => {
+                if (fbUser) {
+                    const isAdminUser = await checkIsFirebaseAdmin(fbUser);
+                    if (isAdminUser) {
+                        set({
+                            user: {
+                                id: fbUser.uid,
+                                email: fbUser.email || '',
+                                name: fbUser.displayName || 'مدير النظام (بوشنكي)',
+                                phone: '',
+                                address: '',
+                                avatar_url: null,
+                            },
+                            isAuthenticated: false,
+                            isAdmin: true,
+                            isLoading: false,
+                        });
+                        return;
+                    }
+
+                    // Regular user session
+                    const profile = await loadUserProfile(fbUser);
+                    set({
+                        user: profile,
+                        isAuthenticated: true,
+                        isAdmin: false,
+                        isLoading: false,
+                    });
+                } else {
+                    set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false });
+                }
+            });
         } catch {
-            // Network error — don't destroy a valid session
             set({ isLoading: false });
         }
     },
 
     signUp: async ({ name, email, phone, password, address }) => {
         set({ isLoading: true, error: null });
+
+        if (!isFirebaseConfigured() || !auth) {
+            set({ isLoading: false, error: 'Firebase غير مهيأ' });
+            return { success: false, error: 'Firebase غير مهيأ' };
+        }
 
         if (!validateEmail(email)) {
             set({ isLoading: false, error: 'البريد الإلكتروني غير صالح' });
@@ -180,124 +282,79 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         const normalizedPhone = normalizePhone(phone);
 
         try {
-            const { data, error } = await insforge.auth.signUp({
-                email: email.trim().toLowerCase(),
-                password,
-                name: name.trim(),
-            });
+            const cred = await createUserWithEmailAndPassword(
+                auth,
+                email.trim().toLowerCase(),
+                password
+            );
 
-            if (error) {
-                const msg = error.message || 'فشل إنشاء الحساب';
-                set({ isLoading: false, error: msg });
-                return { success: false, error: msg };
-            }
+            // Update display name
+            await firebaseUpdateProfile(cred.user, { displayName: name.trim() });
 
-            if (data?.requireEmailVerification) {
-                set({
-                    isLoading: false,
-                    pendingProfile: { phone: normalizedPhone, address: address?.trim() || '' },
-                });
-                return {
-                    success: true,
-                    verificationRequired: true,
-                    email: email.trim().toLowerCase(),
-                };
-            }
-
-            if (data?.user && data?.accessToken) {
+            // Save profile to Firestore
+            if (db) {
                 try {
-                    await insforge.auth.setProfile({
-                        phone: normalizedPhone,
-                        address: address?.trim() || '',
-                    });
-                } catch {
-                    // Non-critical — profile can be updated later
-                }
-
-                set({
-                    user: {
-                        id: data.user.id,
-                        email: data.user.email,
+                    await setDoc(doc(db, 'user_profiles', cred.user.uid), {
                         name: name.trim(),
+                        email: email.trim().toLowerCase(),
                         phone: normalizedPhone,
                         address: address?.trim() || '',
                         avatar_url: null,
-                    },
-                    isAuthenticated: true,
-                    isLoading: false,
-                    pendingProfile: null,
-                });
-                return { success: true };
-            }
-
-            set({ isLoading: false });
-            return { success: false, error: 'حدث خطأ غير متوقع' };
-        } catch (err: any) {
-            const msg = err.message || 'فشل إنشاء الحساب';
-            set({ isLoading: false, error: msg });
-            return { success: false, error: msg };
-        }
-    },
-
-    verifyEmail: async (email, otp) => {
-        set({ isLoading: true, error: null });
-        try {
-            const { data, error } = await insforge.auth.verifyEmail({ email, otp });
-
-            if (error) {
-                const msg = error.message || 'رمز التحقق غير صحيح';
-                set({ isLoading: false, error: msg });
-                return { success: false, error: msg };
-            }
-
-            if (data?.accessToken) {
-                const { pendingProfile } = get();
-
-                if (pendingProfile) {
-                    try {
-                        await insforge.auth.setProfile({
-                            phone: pendingProfile.phone,
-                            address: pendingProfile.address,
-                        });
-                    } catch {
-                        // Non-critical — profile can be updated from account page
-                    }
+                        created_at: new Date().toISOString(),
+                    });
+                } catch (profileErr) {
+                    console.warn('[Firebase] Error saving profile to Firestore:', profileErr);
                 }
-
-                const { data: sessionData } = await insforge.auth.getCurrentSession();
-                const fullUser = sessionData?.session?.user;
-
-                set({
-                    user: fullUser ? mapUser(fullUser) : {
-                        id: data.user?.id || '',
-                        email: data.user?.email || email,
-                        name: data.user?.profile?.name || '',
-                        phone: pendingProfile?.phone || '',
-                        address: pendingProfile?.address || '',
-                        avatar_url: null,
-                    },
-                    isAuthenticated: true,
-                    isLoading: false,
-                    pendingProfile: null,
-                });
-                return { success: true };
             }
 
-            set({ isLoading: false });
-            return { success: false, error: 'حدث خطأ غير متوقع' };
+            // Send email verification
+            try {
+                await sendEmailVerification(cred.user);
+            } catch (verifyErr) {
+                console.warn('[Firebase] Error sending verification email:', verifyErr);
+            }
+
+            set({
+                user: {
+                    id: cred.user.uid,
+                    email: cred.user.email || email.trim().toLowerCase(),
+                    name: name.trim(),
+                    phone: normalizedPhone,
+                    address: address?.trim() || '',
+                    avatar_url: null,
+                },
+                isAuthenticated: true,
+                isLoading: false,
+                pendingProfile: null,
+            });
+            return { success: true };
         } catch (err: any) {
-            const msg = err.message || 'فشل التحقق';
+            let msg = 'فشل إنشاء الحساب';
+            if (err.code === 'auth/email-already-in-use') {
+                msg = 'هذا البريد الإلكتروني مسجل بالفعل';
+            } else if (err.code === 'auth/weak-password') {
+                msg = 'كلمة المرور ضعيفة جداً';
+            } else if (err.code === 'auth/invalid-email') {
+                msg = 'البريد الإلكتروني غير صالح';
+            }
             set({ isLoading: false, error: msg });
             return { success: false, error: msg };
         }
     },
 
-    resendVerification: async (email) => {
+    verifyEmail: async (_email, _otp) => {
+        // Firebase handles email verification via link, not OTP
+        // This is kept for API compatibility but won't be called in the Firebase flow
+        return { success: false, error: 'التحقق عبر OTP غير مدعوم في Firebase. يرجى التحقق من بريدك الإلكتروني.' };
+    },
+
+    resendVerification: async (_email) => {
+        if (!isFirebaseConfigured() || !auth || !auth.currentUser) {
+            return { success: false, error: 'غير مسجّل الدخول' };
+        }
+
         try {
-            const { data, error } = await insforge.auth.resendVerificationEmail({ email });
-            if (error) {
-                return { success: false, error: error.message || 'فشل إعادة الإرسال' };
-            }
+            await sendEmailVerification(auth.currentUser);
             return { success: true };
         } catch (err: any) {
             return { success: false, error: err.message || 'فشل إعادة الإرسال' };
@@ -307,40 +364,45 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     signIn: async (email, password) => {
         set({ isLoading: true, error: null });
 
+        if (!isFirebaseConfigured() || !auth) {
+            set({ isLoading: false, error: 'Firebase غير مهيأ' });
+            return { success: false, error: 'Firebase غير مهيأ' };
+        }
+
         try {
-            const { data, error } = await insforge.auth.signInWithPassword({
-                email: email.trim().toLowerCase(),
-                password,
-            });
+            const cred = await signInWithEmailAndPassword(
+                auth,
+                email.trim().toLowerCase(),
+                password
+            );
 
-            if (error) {
-                const msg = error.message === 'Invalid login credentials'
-                    ? 'البريد الإلكتروني أو كلمة المرور غير صحيحة'
-                    : error.message || 'فشل تسجيل الدخول';
-                set({ isLoading: false, error: msg });
-                return { success: false, error: msg };
-            }
-
-            if (data?.user) {
-                const { data: adminRows } = await insforge.database
-                    .from('admin_users')
-                    .select()
-                    .eq('user_id', data.user.id);
-                const isAdminUser = !!(adminRows && adminRows.length > 0);
-
-                set(buildSessionState(data.user, isAdminUser));
-
+            if (cred.user) {
+                const isAdminUser = await checkIsFirebaseAdmin(cred.user);
                 if (isAdminUser) {
+                    await firebaseSignOut(auth);
+                    set({ isLoading: false, error: 'هذا حساب إدمن. استخدم صفحة دخول الأدمن.' });
                     return { success: false, error: 'هذا حساب إدمن. استخدم صفحة دخول الأدمن.' };
                 }
 
+                const profile = await loadUserProfile(cred.user);
+                set({
+                    user: profile,
+                    isAuthenticated: true,
+                    isAdmin: false,
+                    isLoading: false,
+                });
                 return { success: true };
             }
 
             set({ isLoading: false });
             return { success: false, error: 'حدث خطأ غير متوقع' };
         } catch (err: any) {
-            const msg = err.message || 'فشل تسجيل الدخول';
+            let msg = 'فشل تسجيل الدخول';
+            if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
+                msg = 'البريد الإلكتروني أو كلمة المرور غير صحيحة';
+            } else if (err.code === 'auth/too-many-requests') {
+                msg = 'تم إيقاف الحساب مؤقتاً بسبب محاولات تسجيل دخول كثيرة. حاول لاحقاً.';
+            }
             set({ isLoading: false, error: msg });
             return { success: false, error: msg };
         }
@@ -348,7 +410,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
     signOut: async () => {
         try {
-            await insforge.auth.signOut();
+            if (isFirebaseConfigured() && auth) {
+                await firebaseSignOut(auth).catch(() => {});
+            }
         } finally {
             set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false, error: null, pendingProfile: null });
         }
@@ -357,7 +421,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // Alias for signOut — used by AdminView
     logout: async () => {
         try {
-            await insforge.auth.signOut();
+            if (isFirebaseConfigured() && auth) {
+                await firebaseSignOut(auth).catch(() => {});
+            }
         } finally {
             set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false, error: null, pendingProfile: null });
         }
@@ -382,11 +448,28 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         }
 
         try {
-            const { error } = await insforge.auth.setProfile(profileUpdate);
-            if (error) {
-                const msg = error.message || 'فشل تحديث الملف الشخصي';
-                set({ error: msg });
-                return { success: false, error: msg };
+            // Update display name in Firebase Auth
+            if (isFirebaseConfigured() && auth?.currentUser && profileUpdate.name) {
+                await firebaseUpdateProfile(auth.currentUser, { displayName: profileUpdate.name });
+            }
+
+            // Update profile in Firestore
+            if (isFirebaseConfigured() && db) {
+                const profileRef = doc(db, 'user_profiles', user.id);
+                const profileDoc = await getDoc(profileRef);
+
+                if (profileDoc.exists()) {
+                    await updateDoc(profileRef, {
+                        ...profileUpdate,
+                        updated_at: new Date().toISOString(),
+                    });
+                } else {
+                    await setDoc(profileRef, {
+                        ...profileUpdate,
+                        email: user.email,
+                        created_at: new Date().toISOString(),
+                    });
+                }
             }
 
             set({

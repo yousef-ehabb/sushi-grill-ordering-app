@@ -176,21 +176,24 @@ export const CartSidebar: React.FC<CartSidebarProps> = ({ isOpen, onClose, onChe
                       </div>
                       <div className="space-y-0.5">
                         {itemSauces && itemSauces.length > 0 && (
-                          <p className="text-[10px] text-slate-500 font-bold flex items-center gap-1 flex-wrap">
-                            <span className="text-primary/70">🍟</span>
+                          <p className="text-[10px] text-slate-500 font-medium flex items-center gap-1 flex-wrap">
+                            <span className="text-slate-400 font-semibold">إضافات:</span>
                             {itemSauces.map((s, i) => (
                               <span key={i}>
                                 <span className={!s.active ? 'line-through text-red-400' : ''}>
                                   {s.name}
                                 </span>
-                                {!s.active && <span className="text-[8px] text-red-500 mr-0.5">⚠️</span>}
+                                {!s.active && <AlertTriangle className="w-2.5 h-2.5 text-red-500 inline mr-0.5" />}
                                 {i < itemSauces.length - 1 && '، '}
                               </span>
                             ))}
                           </p>
                         )}
                         {hasUnavailableSauce && (
-                          <p className="text-[9px] text-red-500 font-bold">⚠️ صوص غير متوفر حالياً</p>
+                          <p className="text-[9px] text-red-500 font-semibold flex items-center gap-1">
+                            <AlertTriangle className="w-2.5 h-2.5 text-red-500" />
+                            <span>صوص غير متوفر حالياً</span>
+                          </p>
                         )}
                         {item.specialInstructions && (
                           <p className="text-[10px] text-slate-400 font-medium line-clamp-1">

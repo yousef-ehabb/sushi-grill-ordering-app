@@ -1,7 +1,74 @@
+/* Thmanyah Serif Display */
+@font-face {
+  font-family: 'Thmanyah Serif Display';
+  src: url('/thmanyah%20serif%20display-all-weights/thmanyah_serif_display_Light.otf') format('opentype');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Thmanyah Serif Display';
+  src: url('/thmanyah%20serif%20display-all-weights/thmanyah_serif_display_Regular.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Thmanyah Serif Display';
+  src: url('/thmanyah%20serif%20display-all-weights/thmanyah_serif_display_Bold.otf') format('opentype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Thmanyah Serif Display';
+  src: url('/thmanyah%20serif%20display-all-weights/thmanyah_serif_display_Black.otf') format('opentype');
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* 29LT Azahar (Fallback/Secondary) */
+@font-face {
+  font-family: '29LT Azahar';
+  src: url('/arfonts-29lt-azahar-display-al-tn-trial_all/29lt-azahar-display-al-tn-trial-light.otf') format('opentype');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: '29LT Azahar';
+  src: url('/arfonts-29lt-azahar-display-al-tn-trial_all/29lt-azahar-display-al-tn-trial-regular.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: '29LT Azahar';
+  src: url('/arfonts-29lt-azahar-display-al-tn-trial_all/29lt-azahar-display-al-tn-trial-bold.otf') format('opentype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: '29LT Azahar';
+  src: url('/arfonts-29lt-azahar-display-al-tn-trial_all/29lt-azahar-display-al-tn-trial-black.otf') format('opentype');
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
+  --font-primary: 'Thmanyah Serif Display', '29LT Azahar', 'IBM Plex Sans Arabic', system-ui, sans-serif;
   --font-ibm: 'IBM Plex Sans Arabic', sans-serif;
 }
 
 body {
-  font-family: var(--font-ibm);
+  font-family: var(--font-primary);
 }

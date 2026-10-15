@@ -8,7 +8,7 @@
   --card-foreground: #111827;
   --popover: #ffffff;
   --popover-foreground: #111827;
-  --primary: #DC2626;
+  --primary: #B91C1C;
   --primary-foreground: #ffffff;
   --secondary: #111827;
   --secondary-foreground: #ffffff;
@@ -20,7 +20,8 @@
   --destructive-foreground: #ffffff;
   --border: #E2E8F0;
   --input: #F1F5F9;
-  --ring: #DC2626;
+  --ring: #B91C1C;
+  --brand-amber: #FACC15;
 
   --radius: 0.75rem;
   /* 12px */
@@ -45,7 +46,7 @@
   --card-foreground: #F8FAFC;
   --popover: #0F172A;
   --popover-foreground: #F8FAFC;
-  --primary: #DC2626;
+  --primary: #B91C1C;
   --primary-foreground: #ffffff;
   --secondary: #1E293B;
   --secondary-foreground: #F8FAFC;
@@ -57,10 +58,11 @@
   --destructive-foreground: #F8FAFC;
   --border: #1E293B;
   --input: #1E293B;
-  --ring: #DC2626;
+  --ring: #B91C1C;
 }
 
 @theme inline {
+  --font-sans: 'Thmanyah Serif Display', '29LT Azahar', 'IBM Plex Sans Arabic', system-ui, sans-serif;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore, OrderStatus, Product } from '../store/useStore';
 import { useAuthStore } from '../store/useAuthStore';
+import { ordersService } from '../../services/firestore';
 import { ProductEditModal } from './ProductEditModal';
 import {
   Package,
@@ -26,7 +27,9 @@ import {
   Hash,
   Plus,
   Trash2,
-  X
+  X,
+  User,
+  UtensilsCrossed
 } from 'lucide-react';
 import { resolveAllOptionNames } from '../utils/optionNames';
 import { clsx } from 'clsx';
@@ -75,6 +78,12 @@ export const AdminView: React.FC = () => {
       setIsLoading(false);
     };
     loadData();
+
+    // Subscribe to real-time order updates
+    const unsubscribe = ordersService.subscribeToAllOrders((liveOrders) => {
+      useStore.setState({ orders: liveOrders });
+    });
+    return () => unsubscribe();
   }, []);
 
   // Sync local state when global data loads
@@ -260,7 +269,8 @@ export const AdminView: React.FC = () => {
                 onClick={openSaucePanel}
                 className="flex items-center gap-2 bg-amber-50 text-amber-700 px-4 py-2 rounded-xl font-bold text-sm hover:bg-amber-100 transition-all border border-amber-200"
               >
-                🍟 إدارة الصوصات
+                <UtensilsCrossed className="w-4 h-4" />
+                <span>إدارة الصوصات</span>
               </button>
             </div>
 
@@ -331,7 +341,7 @@ export const AdminView: React.FC = () => {
                         <div className="bg-slate-50 rounded-xl p-4 space-y-3">
                           <p className="font-bold text-slate-900 flex items-center gap-2">
                             <span className="w-8 h-8 rounded-full bg-white flex items-center justify-center border border-slate-100">
-                              👤
+                              <User className="w-4 h-4 text-slate-500" />
                             </span>
                             {order.customer_name}
                           </p>
@@ -365,8 +375,8 @@ export const AdminView: React.FC = () => {
                                 </div>
                                 <div className="mr-11 space-y-0.5 mt-0.5">
                                   {item.selected_option_ids && item.selected_option_ids.length > 0 && (
-                                    <p className="text-[10px] text-slate-500 font-bold">
-                                      🍟 {item.selected_option_ids.map((id: string) => optionNames.get(id)).filter(Boolean).join('، ')}
+                                    <p className="text-[10px] text-slate-500 font-medium">
+                                      إضافات: {item.selected_option_ids.map((id: string) => optionNames.get(id)).filter(Boolean).join('، ')}
                                     </p>
                                   )}
                                   {item.special_instructions && (
@@ -517,7 +527,7 @@ export const AdminView: React.FC = () => {
                   value={localClosedMessage}
                   onChange={(e) => setLocalClosedMessage(e.target.value)}
                   className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all placeholder:text-slate-300 font-medium resize-none"
-                  placeholder="مثال: المطعم مغلق حالياً ❤️ نلتقي الساعة 11 صباحاً"
+                  placeholder="مثال: المطعم مغلق حالياً، نلتقي الساعة 11 صباحاً"
                 />
               </div>
             </div>
@@ -665,7 +675,9 @@ export const AdminView: React.FC = () => {
               {/* Panel Header */}
               <div className="flex items-center justify-between p-5 border-b bg-gradient-to-l from-amber-50 to-white">
                 <div className="flex items-center gap-3">
-                  <span className="text-2xl">🍟</span>
+                  <div className="w-9 h-9 rounded-xl bg-amber-100 flex items-center justify-center text-amber-700">
+                    <UtensilsCrossed className="w-5 h-5" />
+                  </div>
                   <div>
                     <h3 className="text-lg font-black text-slate-900">إدارة الصوصات</h3>
                     <p className="text-xs text-slate-500">تشغيل / إيقاف / إضافة / تعديل</p>
