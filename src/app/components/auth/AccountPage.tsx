@@ -113,7 +113,7 @@ export const AccountPage: React.FC = () => {
         new: { label: 'جديد', color: 'bg-blue-100 text-blue-700' },
         preparing: { label: 'قيد التحضير', color: 'bg-amber-100 text-amber-700' },
         ready: { label: 'جاهز', color: 'bg-green-100 text-green-700' },
-        out_for_delivery: { label: 'في التوصيل', color: 'bg-purple-100 text-purple-700' },
+        out_for_delivery: { label: 'في التوصيل', color: 'bg-teal-100 text-teal-700' },
         completed: { label: 'مكتمل', color: 'bg-slate-100 text-slate-600' },
         cancelled: { label: 'ملغي', color: 'bg-red-100 text-red-700' },
     };

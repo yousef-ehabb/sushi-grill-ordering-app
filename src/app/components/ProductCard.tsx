@@ -54,55 +54,71 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
   return (
     <>
       <div
-        className={`group relative bg-white rounded-2xl border border-zinc-100 shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden flex flex-col h-full ${isDisabled ? 'opacity-60 grayscale-[30%]' : ''}`}
+        className={`group relative bg-white rounded-2xl border border-zinc-100 shadow-sm transition-all duration-200 overflow-hidden flex flex-col h-full ${
+          !product.is_available
+            ? 'border-slate-200/80 bg-slate-50/40'
+            : 'hover:shadow-md'
+        }`}
       >
         {/* Image */}
         <div
-          className="relative aspect-[4/3] overflow-hidden bg-zinc-100 cursor-pointer"
-          onClick={() => setIsDetailsOpen(true)}
+          className={`relative aspect-[4/3] overflow-hidden bg-zinc-100 ${
+            product.is_available ? 'cursor-pointer' : 'cursor-default'
+          }`}
+          onClick={() => {
+            if (product.is_available) {
+              setIsDetailsOpen(true);
+            }
+          }}
         >
           <img
             src={product.image_url}
             alt={product.name_ar}
-            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+            className={`w-full h-full object-cover transition-transform duration-500 ${
+              product.is_available
+                ? 'group-hover:scale-105'
+                : 'grayscale-[40%] opacity-75'
+            }`}
             loading="lazy"
           />
 
-          {/* Availability Overlay */}
-          {!product.is_available && (
-            <div className="absolute inset-0 bg-white/70 backdrop-blur-[2px] z-10 flex items-center justify-center p-2 text-center">
-              <span className="bg-zinc-900 text-white px-3 py-1 md:px-4 md:py-1.5 rounded-full text-[10px] md:text-xs font-bold shadow-md -rotate-3">
-                غير متوفر حالياً
+          {/* Availability Overlay / Badge */}
+          {!product.is_available ? (
+            <div className="absolute inset-0 bg-black/25 z-10 flex items-center justify-center p-2 text-center pointer-events-none">
+              <span className="bg-slate-900/95 text-white border border-white/20 px-3.5 py-1.5 rounded-full text-xs font-black shadow-lg">
+                غير متاح حالياً
               </span>
             </div>
-          )}
-
-          {/* Category Inactive Overlay */}
-          {product.is_available && isCategoryInactive && (
+          ) : isCategoryInactive ? (
             <div className="absolute inset-0 bg-white/70 backdrop-blur-[2px] z-10 flex items-center justify-center p-2 text-center">
               <span className="bg-amber-600 text-white px-3 py-1 md:px-4 md:py-1.5 rounded-full text-[10px] md:text-xs font-bold shadow-md -rotate-3">
                 القسم غير متاح
               </span>
             </div>
-          )}
-
-          {/* Promotional Badge */}
-          {product.is_available && !isCategoryInactive && (product.badge || product.is_best_seller) && (
+          ) : (product.badge || product.is_best_seller) ? (
             <div className="absolute top-2 right-2 md:top-3 md:right-3 z-10">
               <span className="bg-amber-400 text-stone-950 font-black text-[10px] md:text-xs px-2.5 py-0.5 md:px-3 md:py-1 rounded-full shadow-sm tracking-tight">
                 {product.badge ? product.badge.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '').trim() : 'الأكثر طلباً'}
               </span>
             </div>
-          )}
+          ) : null}
         </div>
 
         {/* Body */}
         <div className="p-3 sm:p-4 flex flex-col flex-grow">
           {/* Product Name — forced Sans-Serif for English glyphs */}
           <h3
-            className="font-black text-sm md:text-base text-zinc-900 line-clamp-1 cursor-pointer group-hover:text-red-700 transition-colors mb-0.5"
+            className={`font-black text-sm md:text-base line-clamp-1 mb-0.5 ${
+              product.is_available
+                ? 'text-zinc-900 cursor-pointer group-hover:text-red-700 transition-colors'
+                : 'text-slate-600 cursor-default'
+            }`}
             style={{ fontFamily: "'Inter', 'IBM Plex Sans Arabic', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}
-            onClick={() => setIsDetailsOpen(true)}
+            onClick={() => {
+              if (product.is_available) {
+                setIsDetailsOpen(true);
+              }
+            }}
             title={product.name_ar}
           >
             {product.name_ar}
@@ -119,32 +135,42 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
           <div className="pt-2 border-t border-zinc-50 flex items-center justify-between gap-2 mt-auto">
             {/* Price */}
             <div className="flex items-baseline gap-1">
-              <span className="text-red-600 font-extrabold text-base md:text-lg tracking-tight">
+              <span className={`font-extrabold text-base md:text-lg tracking-tight ${product.is_available ? 'text-red-600' : 'text-slate-500'}`}>
                 {product.price}
               </span>
               <span className="text-xs text-zinc-500 font-medium">ج.م</span>
             </div>
 
             {/* Action Button */}
-            <button
-              onClick={handleAddToCart}
-              disabled={isDisabled || isLoadingOptionGroups}
-              className={`h-8 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1 transition-all active:scale-95
-                ${!isDisabled && !isLoadingOptionGroups
-                  ? 'bg-red-600 hover:bg-red-700 text-white shadow-sm shadow-red-200'
-                  : 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
-                }`}
-              aria-label={`أضف ${product.name_ar} للسلة`}
-            >
-              <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-              <span>
-                {isLoadingOptionGroups
-                  ? '...'
-                  : hasOptions
-                    ? 'تخصيص'
-                    : 'أضف'}
-              </span>
-            </button>
+            {!product.is_available ? (
+              <button
+                disabled={true}
+                className="h-8 px-3 rounded-xl font-bold text-xs flex items-center justify-center bg-slate-200 text-slate-500 cursor-not-allowed select-none shadow-none"
+                aria-label={`${product.name_ar} غير متاح`}
+              >
+                <span>غير متاح</span>
+              </button>
+            ) : (
+              <button
+                onClick={handleAddToCart}
+                disabled={isDisabled || isLoadingOptionGroups}
+                className={`h-8 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1 transition-all active:scale-95
+                  ${!isDisabled && !isLoadingOptionGroups
+                    ? 'bg-red-600 hover:bg-red-700 text-white shadow-sm shadow-red-200 cursor-pointer'
+                    : 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
+                  }`}
+                aria-label={`أضف ${product.name_ar} للسلة`}
+              >
+                <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                <span>
+                  {isLoadingOptionGroups
+                    ? '...'
+                    : hasOptions
+                      ? 'تخصيص'
+                      : 'أضف'}
+                </span>
+              </button>
+            )}
           </div>
         </div>
       </div>

@@ -28,7 +28,7 @@ interface StatusStep {
 const deliverySteps: StatusStep[] = [
     { key: 'new', label: 'جديد', icon: CircleDot, color: 'text-blue-600', bgColor: 'bg-blue-500' },
     { key: 'preparing', label: 'قيد التحضير', icon: ChefHat, color: 'text-amber-600', bgColor: 'bg-amber-500' },
-    { key: 'out_for_delivery', label: 'في التوصيل', icon: Truck, color: 'text-purple-600', bgColor: 'bg-purple-500' },
+    { key: 'out_for_delivery', label: 'في التوصيل', icon: Truck, color: 'text-teal-600', bgColor: 'bg-teal-500' },
 ];
 
 const pickupSteps: StatusStep[] = [

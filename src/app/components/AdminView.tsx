@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore, OrderStatus, Product } from '../store/useStore';
 import { useAuthStore } from '../store/useAuthStore';
@@ -8,12 +8,10 @@ import {
   Package,
   Clock,
   CheckCircle,
-  ChevronRight,
   LayoutDashboard,
   Utensils,
   Phone,
   MapPin,
-  CreditCard,
   Loader2,
   RefreshCw,
   LogOut,
@@ -29,7 +27,18 @@ import {
   Trash2,
   X,
   User,
-  UtensilsCrossed
+  UtensilsCrossed,
+  BarChart3,
+  TrendingUp,
+  Flame,
+  ShoppingBag,
+  Layers,
+  Droplets,
+  ChevronDown,
+  ChevronUp,
+  Truck,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
 import { resolveAllOptionNames } from '../utils/optionNames';
 import { clsx } from 'clsx';
@@ -42,17 +51,65 @@ export const AdminView: React.FC = () => {
     allOptionGroups,
     updateOrderStatus, fetchOrders, fetchProducts, fetchCategories,
     fetchGlobalSettings, fetchBusinessRules, fetchAllOptionGroups,
-    updateProduct, updateGlobalSettings, toggleCategoryActive, updateBusinessRule,
+    updateProduct, updateGlobalSettings, updateBusinessRule,
     toggleOptionActive, createOption, updateOption, deleteOption
   } = useStore();
   const { signOut } = useAuthStore();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<'orders' | 'menu' | 'controls'>('orders');
+  const [activeTab, setActiveTab] = useState<'orders' | 'menu' | 'controls' | 'analytics'>('orders');
   const [optionNames, setOptionNames] = useState<Map<string, string>>(new Map());
   const optionNamesRef = useRef<Map<string, string>>(new Map());
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+
+  // Orders section filter & collapsible state
+  const [orderStatusFilter, setOrderStatusFilter] = useState<'all' | OrderStatus>('all');
+  const [collapsedOrderIds, setCollapsedOrderIds] = useState<Set<string>>(new Set());
+
+  const toggleOrderCollapse = (orderId: string) => {
+    setCollapsedOrderIds(prev => {
+      const next = new Set(prev);
+      if (next.has(orderId)) {
+        next.delete(orderId);
+      } else {
+        next.add(orderId);
+      }
+      return next;
+    });
+  };
+
+  const collapseAllCompleted = () => {
+    const completedIds = orders.filter(o => o.status === 'completed').map(o => o.id);
+    setCollapsedOrderIds(prev => new Set([...prev, ...completedIds]));
+  };
+
+  const expandAllOrders = () => {
+    setCollapsedOrderIds(new Set());
+  };
+
+  const orderCounts = useMemo(() => {
+    const counts: Record<string, number> = {
+      all: orders.length,
+      new: 0,
+      preparing: 0,
+      ready: 0,
+      out_for_delivery: 0,
+      completed: 0,
+      cancelled: 0,
+    };
+    orders.forEach(o => {
+      if (counts[o.status] !== undefined) {
+        counts[o.status]++;
+      }
+    });
+    return counts;
+  }, [orders]);
+
+  const filteredOrders = useMemo(() => {
+    if (orderStatusFilter === 'all') return orders;
+    return orders.filter(o => o.status === orderStatusFilter);
+  }, [orders, orderStatusFilter]);
 
   // Local state for controls form
   const [localClosedMessage, setLocalClosedMessage] = useState('');
@@ -101,6 +158,206 @@ export const AdminView: React.FC = () => {
     setLocalMinQty(map);
   }, [businessRules]);
 
+  // Analytics computations
+  const validOrders = useMemo(() => {
+    return orders.filter(order => order.status !== 'cancelled');
+  }, [orders]);
+
+  const todayStats = useMemo(() => {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+
+    let revenue = 0;
+    let count = 0;
+
+    for (const order of validOrders) {
+      const orderDate = new Date(order.created_at).getTime();
+      if (!isNaN(orderDate) && orderDate >= startOfToday) {
+        revenue += (order.total || 0);
+        count += 1;
+      }
+    }
+
+    return { revenue, count };
+  }, [validOrders]);
+
+  const monthStats = useMemo(() => {
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+    let revenue = 0;
+    let count = 0;
+
+    for (const order of validOrders) {
+      const orderDate = new Date(order.created_at).getTime();
+      if (!isNaN(orderDate) && orderDate >= startOfMonth) {
+        revenue += (order.total || 0);
+        count += 1;
+      }
+    }
+
+    return { revenue, count };
+  }, [validOrders]);
+
+  const productSales = useMemo(() => {
+    const statsMap = new Map<string, {
+      id: string;
+      name_ar: string;
+      name_en?: string;
+      image_url?: string;
+      price: number;
+      unitsSold: number;
+      revenue: number;
+    }>();
+
+    // Initialize with all products in menu
+    products.forEach(p => {
+      statsMap.set(p.id, {
+        id: p.id,
+        name_ar: p.name_ar,
+        name_en: p.name_en,
+        image_url: p.image_url,
+        price: p.price,
+        unitsSold: 0,
+        revenue: 0,
+      });
+    });
+
+    // Aggregate from non-cancelled orders
+    validOrders.forEach(order => {
+      order.items?.forEach(item => {
+        const qty = item.quantity || 1;
+        const itemRev = (item.unit_price || 0) * qty;
+
+        let stat = item.product_id ? statsMap.get(item.product_id) : undefined;
+        if (!stat) {
+          stat = Array.from(statsMap.values()).find(p => p.name_ar === item.name_ar);
+        }
+
+        if (stat) {
+          stat.unitsSold += qty;
+          stat.revenue += itemRev;
+        } else {
+          const fallbackKey = item.product_id || item.name_ar;
+          statsMap.set(fallbackKey, {
+            id: fallbackKey,
+            name_ar: item.name_ar,
+            unitsSold: qty,
+            revenue: itemRev,
+            price: item.unit_price || 0,
+          });
+        }
+      });
+    });
+
+    const allStats = Array.from(statsMap.values());
+    allStats.sort((a, b) => b.unitsSold - a.unitsSold || b.revenue - a.revenue);
+    return allStats;
+  }, [products, validOrders]);
+
+  const hasSales = validOrders.length > 0 && productSales.some(p => p.unitsSold > 0);
+  const bestSeller = hasSales ? productSales[0] : null;
+  const leastSeller = hasSales ? productSales[productSales.length - 1] : null;
+
+  // Sauce analytics — deduplicated by normalized Arabic name across all products
+  const sauceSales = useMemo(() => {
+    type SauceStat = {
+      name_ar: string;
+      priceDelta: number;
+      orderCount: number;
+      revenue: number;
+    };
+
+    /**
+     * Normalize a sauce name:
+     * - Trim whitespace
+     * - Handle generic fries upgrade combos vs specific sauces
+     * - Strip leading combo prefixes like "إضافة بطاطس + " or "إكسترا بطاطس + " so that
+     *   "إضافة بطاطس + صوص تكساس" merges with "صوص تكساس"
+     * - Strip generic "إضافة " prefix
+     */
+    const normalize = (raw: string): string => {
+      if (!raw) return '';
+      let name = raw.trim();
+
+      // If generic combo fries option (e.g. "إكسترا بطاطس + صوص" or "إضافة بطاطس + صوص")
+      // preserve as clean upgrade label instead of reducing to just "صوص"
+      if (/^(?:إ?ضافة|إ?كسترا)?\s*بطاطس\s*\+\s*صوص$/u.test(name)) {
+        return 'إكسترا بطاطس + صوص';
+      }
+
+      // Strip combo prefixes like:
+      // "إضافة بطاطس + صوص تكساس" -> "صوص تكساس"
+      // "إكسترا بطاطس + صوص تكساس" -> "صوص تكساس"
+      // "بطاطس + صوص حار" -> "صوص حار"
+      name = name.replace(/^(?:إ?ضافة|إ?كسترا)?\s*بطاطس\s*\+\s*/u, '');
+
+      // Strip generic "إضافة " or "اضافة " prefix (e.g. "إضافة صوص تكساس" -> "صوص تكساس")
+      name = name.replace(/^إ?ضافة\s+/u, '');
+
+      return name.trim();
+    };
+
+    // Build catalog map keyed by NORMALIZED NAME (not option id)
+    // This merges e.g. opt-hot-prod-akm + opt-hot-prod-ump → "صوص حار"
+    const catalogMap = new Map<string, SauceStat>();
+
+    // Also build id→normalizedName lookup for order aggregation
+    const idToName = new Map<string, string>();
+
+    allOptionGroups.forEach(group => {
+      group.options?.forEach(opt => {
+        const key = normalize(opt.name_ar);
+        idToName.set(opt.id, key);
+        if (!catalogMap.has(key)) {
+          catalogMap.set(key, {
+            name_ar: key,
+            priceDelta: opt.price_delta ?? 0,
+            orderCount: 0,
+            revenue: 0,
+          });
+        }
+        // If this duplicate has a non-zero price and the existing entry is 0, update price
+        const existing = catalogMap.get(key)!;
+        if (existing.priceDelta === 0 && (opt.price_delta ?? 0) > 0) {
+          existing.priceDelta = opt.price_delta ?? 0;
+        }
+      });
+    });
+
+    // Aggregate order counts from valid (non-cancelled) orders
+    // Each selected option on an order item counts once per item quantity
+    validOrders.forEach(order => {
+      order.items?.forEach(item => {
+        const qty = item.quantity || 1;
+        (item.selected_option_ids || []).forEach(optId => {
+          // Resolve the normalized name for this option ID
+          let key = idToName.get(optId);
+          if (!key) {
+            // Fall back to cached optionNames then normalize
+            const raw = optionNames.get(optId) || optionNamesRef.current.get(optId);
+            key = raw ? normalize(raw) : normalize(optId);
+          }
+
+          let stat = catalogMap.get(key);
+          if (!stat) {
+            // Sauce appears in orders but not in catalog (e.g. deleted option)
+            stat = { name_ar: key, priceDelta: 0, orderCount: 0, revenue: 0 };
+            catalogMap.set(key, stat);
+          }
+          stat.orderCount += qty;
+          stat.revenue += stat.priceDelta * qty;
+        });
+      });
+    });
+
+    const stats = Array.from(catalogMap.values());
+    stats.sort((a, b) => b.orderCount - a.orderCount || b.revenue - a.revenue);
+    return stats;
+  }, [allOptionGroups, validOrders, optionNames]);
+
+  const topSauce = sauceSales.length > 0 && sauceSales[0].orderCount > 0 ? sauceSales[0] : null;
+
   // Keep ref in sync with state so effect can read without depending on optionNames
   useEffect(() => {
     optionNamesRef.current = optionNames;
@@ -111,7 +368,7 @@ export const AdminView: React.FC = () => {
     const fetchSauceNames = async () => {
       const allIds = Array.from(new Set(
         orders.flatMap(order =>
-          order.items.flatMap(item => item.selected_option_ids || [])
+          (order.items || []).flatMap(item => item.selected_option_ids || [])
         )
       ));
       if (allIds.length === 0) return;
@@ -133,6 +390,13 @@ export const AdminView: React.FC = () => {
     ]);
     setIsRefreshing(false);
   };
+
+  // Load option groups when switching to analytics tab (needed for sauce catalog)
+  useEffect(() => {
+    if (activeTab === 'analytics' && allOptionGroups.length === 0) {
+      fetchAllOptionGroups();
+    }
+  }, [activeTab]);
 
   const openSaucePanel = async () => {
     setShowSaucePanel(true);
@@ -177,7 +441,7 @@ export const AdminView: React.FC = () => {
     new: 'bg-blue-100 text-blue-700',
     preparing: 'bg-orange-100 text-orange-700',
     ready: 'bg-indigo-100 text-indigo-700',
-    out_for_delivery: 'bg-purple-100 text-purple-700',
+    out_for_delivery: 'bg-teal-100 text-teal-700',
     completed: 'bg-green-100 text-green-700',
     cancelled: 'bg-red-100 text-red-700',
   };
@@ -197,7 +461,7 @@ export const AdminView: React.FC = () => {
     <div className="min-h-screen bg-slate-50" dir="rtl">
       <Toaster position="top-center" expand={true} richColors />
       {/* Admin TopNav */}
-      <div className="bg-white border-b sticky top-0 z-50">
+      <div className="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 flex items-center justify-between h-16">
           <div className="flex items-center gap-4 lg:gap-6 overflow-x-auto">
             <h1 className="text-xl font-black text-slate-900 flex items-center gap-2 shrink-0">
@@ -233,6 +497,16 @@ export const AdminView: React.FC = () => {
                 <Settings2 className="w-4 h-4" />
                 التحكم التشغيلي
               </button>
+              <button
+                onClick={() => setActiveTab('analytics')}
+                className={clsx(
+                  "px-4 py-2 rounded-lg font-bold text-sm transition-all whitespace-nowrap flex items-center gap-2",
+                  activeTab === 'analytics' ? "bg-red-50 text-primary" : "text-slate-500 hover:bg-slate-50"
+                )}
+              >
+                <BarChart3 className="w-4 h-4" />
+                الإحصائيات والمبيعات
+              </button>
             </nav>
             <button
               onClick={handleRefresh}
@@ -262,142 +536,338 @@ export const AdminView: React.FC = () => {
           </div>
         ) : activeTab === 'orders' ? (
           /* ── ORDERS TAB ─────────────────────────────────── */
-          <div className="space-y-6">
-            <div className="flex justify-between items-center">
-              <h2 className="text-2xl font-bold text-slate-900">الطلبات الواردة</h2>
-              <button
-                onClick={openSaucePanel}
-                className="flex items-center gap-2 bg-amber-50 text-amber-700 px-4 py-2 rounded-xl font-bold text-sm hover:bg-amber-100 transition-all border border-amber-200"
-              >
-                <UtensilsCrossed className="w-4 h-4" />
-                <span>إدارة الصوصات</span>
-              </button>
+          <div className="space-y-4">
+            {/* Header: Title + Sauce Management Button */}
+            <div className="flex flex-wrap justify-between items-center gap-3">
+              <div>
+                <h2 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
+                  <span>الطلبات الواردة</span>
+                  <span className="text-xs bg-red-50 text-primary border border-red-100 font-bold px-2.5 py-0.5 rounded-full">
+                    {orders.length} {orders.length === 1 ? 'طلب' : 'طلبات'}
+                  </span>
+                </h2>
+                <p className="text-slate-500 text-xs mt-0.5">متابعة وإدارة حالات الطلبات الحية لحظياً</p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={openSaucePanel}
+                  className="flex items-center gap-2 bg-amber-50 text-amber-700 px-3.5 py-2 rounded-xl font-bold text-xs hover:bg-amber-100 transition-all border border-amber-200"
+                >
+                  <UtensilsCrossed className="w-4 h-4" />
+                  <span>إدارة الصصوصات</span>
+                </button>
+              </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-4">
-              {orders.length === 0 ? (
-                <div className="bg-white rounded-2xl p-20 text-center border-2 border-dashed border-slate-200">
-                  <Package className="w-12 h-12 text-slate-300 mx-auto mb-4" />
-                  <p className="text-slate-500 font-medium">لا يوجد طلبات حالياً</p>
+            {/* Quick Status Filter Bar & Collapse Action */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-2.5 sm:p-3 rounded-2xl border border-slate-100 shadow-sm">
+              {/* Filter Pills */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 w-full lg:w-auto scrollbar-none">
+                {[
+                  { key: 'all' as const, label: 'الكل' },
+                  { key: 'new' as const, label: 'جديد' },
+                  { key: 'preparing' as const, label: 'قيد التحضير' },
+                  { key: 'ready' as const, label: 'جاهز للاستلام' },
+                  { key: 'out_for_delivery' as const, label: 'في التوصيل' },
+                  { key: 'completed' as const, label: 'تم التسليم' },
+                  { key: 'cancelled' as const, label: 'ملغي' },
+                ].map((tab) => {
+                  const count = orderCounts[tab.key] || 0;
+                  const isActive = orderStatusFilter === tab.key;
+                  // Don't show out_for_delivery or cancelled if 0, unless selected
+                  if ((tab.key === 'out_for_delivery' || tab.key === 'cancelled') && count === 0 && !isActive) {
+                    return null;
+                  }
+                  return (
+                    <button
+                      key={tab.key}
+                      onClick={() => setOrderStatusFilter(tab.key)}
+                      className={clsx(
+                        "px-3 py-1.5 rounded-xl font-bold text-xs transition-all flex items-center gap-1.5 shrink-0 whitespace-nowrap",
+                        isActive
+                          ? "bg-red-50 text-primary border border-red-200 shadow-xs"
+                          : "text-slate-600 hover:bg-slate-50 border border-transparent"
+                      )}
+                    >
+                      <span>{tab.label}</span>
+                      <span className={clsx(
+                        "px-1.5 py-0.2 rounded-full text-[10px] font-black",
+                        isActive
+                          ? "bg-primary text-white"
+                          : "bg-slate-100 text-slate-500"
+                      )}>
+                        {count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Quick Actions (Collapse/Expand Completed) */}
+              <div className="flex items-center gap-2 mr-auto lg:mr-0 text-xs">
+                {orderCounts.completed > 0 && (
+                  <button
+                    onClick={collapsedOrderIds.size > 0 ? expandAllOrders : collapseAllCompleted}
+                    className="flex items-center gap-1.5 text-slate-600 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 transition-all font-semibold text-xs"
+                    title={collapsedOrderIds.size > 0 ? 'توسيع جميع الطلبات المطوية' : 'طي الطلبات المكتملة لتوفير المساحة'}
+                  >
+                    {collapsedOrderIds.size > 0 ? (
+                      <>
+                        <Maximize2 className="w-3.5 h-3.5" />
+                        <span>توسيع الكل ({collapsedOrderIds.size})</span>
+                      </>
+                    ) : (
+                      <>
+                        <Minimize2 className="w-3.5 h-3.5" />
+                        <span>طي الطلبات المكتملة</span>
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Orders Responsive Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {filteredOrders.length === 0 ? (
+                <div className="col-span-full bg-white rounded-2xl p-16 text-center border-2 border-dashed border-slate-200">
+                  <Package className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                  <p className="text-slate-600 font-bold text-sm">لا توجد طلبات في هذا القسم</p>
+                  <p className="text-slate-400 text-xs mt-1">جرّب اختيار فلتر آخر أو انتظار طلبات جديدة</p>
                 </div>
               ) : (
-                orders.map((order) => (
-                  <motion.div
-                    layout
-                    key={order.id}
-                    className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100"
-                  >
-                    <div className="flex flex-wrap justify-between items-start gap-4 mb-6">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-3">
-                          <span className="text-lg font-black text-slate-900">#{order.id.slice(0, 8).toUpperCase()}</span>
-                          <span className={clsx("px-3 py-1 rounded-full text-xs font-bold", statusColors[order.status])}>
-                            {statusLabels[order.status]}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-4 text-sm text-slate-500 mt-2">
-                          <span className="flex items-center gap-1">
-                            <Clock className="w-4 h-4" />
-                            {new Date(order.created_at).toLocaleTimeString('ar-EG')}
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <CreditCard className="w-4 h-4" />
-                            كاش (عند الاستلام)
-                          </span>
-                        </div>
-                      </div>
+                filteredOrders.map((order) => {
+                  const isCollapsed = collapsedOrderIds.has(order.id);
+                  const totalItemsCount = (order.items || []).reduce((sum, item) => sum + (item.quantity || 1), 0);
 
-                      <div className="flex gap-2">
-                        {order.status === 'new' && (
-                          <button
-                            onClick={() => updateOrderStatus(order.id, 'preparing')}
-                            className="bg-primary text-white px-6 py-2 rounded-xl font-bold text-sm hover:bg-red-700 transition-all shadow-lg shadow-red-100"
-                          >
-                            بدء التحضير
-                          </button>
-                        )}
-                        {order.status === 'preparing' && (
-                          <button
-                            onClick={() => updateOrderStatus(order.id, 'ready')}
-                            className="bg-orange-500 text-white px-6 py-2 rounded-xl font-bold text-sm hover:bg-orange-600 transition-all shadow-lg shadow-orange-100"
-                          >
-                            جاهز للاستلام
-                          </button>
-                        )}
-                        {order.status === 'ready' && (
-                          <button
-                            onClick={() => updateOrderStatus(order.id, 'completed')}
-                            className="bg-green-600 text-white px-6 py-2 rounded-xl font-bold text-sm hover:bg-green-700 transition-all shadow-lg shadow-green-100"
-                          >
-                            تم التسليم
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8 border-t pt-6">
-                      <div className="space-y-4">
-                        <h4 className="font-bold text-slate-700 text-sm uppercase tracking-wider">تفاصيل العميل</h4>
-                        <div className="bg-slate-50 rounded-xl p-4 space-y-3">
-                          <p className="font-bold text-slate-900 flex items-center gap-2">
-                            <span className="w-8 h-8 rounded-full bg-white flex items-center justify-center border border-slate-100">
-                              <User className="w-4 h-4 text-slate-500" />
+                  // ── Collapsed Order Card ──
+                  if (isCollapsed) {
+                    return (
+                      <motion.div
+                        layout
+                        key={order.id}
+                        className="bg-white rounded-2xl p-3.5 shadow-sm border border-slate-100 hover:border-slate-200 transition-all flex flex-col justify-between"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <button
+                              onClick={() => toggleOrderCollapse(order.id)}
+                              className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-700 transition-all shrink-0"
+                              title="توسيع تفاصيل الطلب"
+                            >
+                              <ChevronDown className="w-4 h-4" />
+                            </button>
+                            <span className="text-xs font-black text-slate-900 shrink-0">
+                              #{order.id.slice(0, 8).toUpperCase()}
                             </span>
-                            {order.customer_name}
-                          </p>
-                          <p className="text-slate-600 flex items-center gap-2">
-                            <Phone className="w-4 h-4" />
-                            {order.customer_phone}
-                          </p>
+                            <span className={clsx("px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0", statusColors[order.status])}>
+                              {statusLabels[order.status]}
+                            </span>
+                            <span className="text-xs text-slate-700 font-bold truncate">
+                              {order.customer_name}
+                            </span>
+                          </div>
+                          <span className="text-xs font-black text-slate-900 shrink-0">
+                            {order.total} ج.م
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between text-[11px] text-slate-400 mt-2 pt-2 border-t border-slate-100/70">
+                          <span className="flex items-center gap-1 text-[11px]">
+                            <Clock className="w-3 h-3 text-slate-400" />
+                            {new Date(order.created_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                          <span className="text-slate-500 font-medium">
+                            {totalItemsCount} {totalItemsCount === 1 ? 'صنف' : 'أصناف'}
+                          </span>
+                          <button
+                            onClick={() => toggleOrderCollapse(order.id)}
+                            className="text-primary hover:underline text-[11px] font-bold"
+                          >
+                            عرض التفاصيل
+                          </button>
+                        </div>
+                      </motion.div>
+                    );
+                  }
+
+                  // ── Compact Expanded Order Card ──
+                  return (
+                    <motion.div
+                      layout
+                      key={order.id}
+                      className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 hover:border-slate-200 hover:shadow-md transition-all flex flex-col justify-between h-full group"
+                    >
+                      {/* Top: Header + Customer Info + Ordered Items */}
+                      <div className="space-y-3">
+                        {/* 1. Compact Header */}
+                        <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-sm font-black text-slate-900 tracking-tight shrink-0">
+                              #{order.id.slice(0, 8).toUpperCase()}
+                            </span>
+                            <span className={clsx("px-2.5 py-0.5 rounded-full text-[11px] font-bold whitespace-nowrap", statusColors[order.status])}>
+                              {statusLabels[order.status]}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 text-xs text-slate-500 shrink-0">
+                            <span className="flex items-center gap-1 text-[11px] text-slate-400">
+                              <Clock className="w-3.5 h-3.5" />
+                              {new Date(order.created_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                            <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-medium">
+                              كاش
+                            </span>
+                            <button
+                              onClick={() => toggleOrderCollapse(order.id)}
+                              className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-700 transition-all"
+                              title="طي تفاصيل الطلب"
+                            >
+                              <ChevronUp className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* 2. Compact Customer Info Strip */}
+                        <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100/80 text-xs space-y-1.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                              <span className="font-bold text-slate-900 truncate">{order.customer_name}</span>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <a
+                                href={`tel:${order.customer_phone}`}
+                                className="text-slate-600 hover:text-primary flex items-center gap-1 text-[11px] font-medium"
+                                dir="ltr"
+                              >
+                                <Phone className="w-3 h-3 text-slate-400" />
+                                {order.customer_phone}
+                              </a>
+                              <span className={clsx(
+                                "px-2 py-0.5 rounded-md text-[10px] font-bold flex items-center gap-1",
+                                order.type === 'delivery'
+                                  ? "bg-blue-50 text-blue-700 border border-blue-100"
+                                  : "bg-red-50 text-primary border border-red-100"
+                              )}>
+                                {order.type === 'delivery' ? (
+                                  <>
+                                    <Truck className="w-3 h-3" />
+                                    <span>توصيل</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <ShoppingBag className="w-3 h-3" />
+                                    <span>استلام</span>
+                                  </>
+                                )}
+                              </span>
+                            </div>
+                          </div>
                           {order.address && (
-                            <p className="text-slate-600 flex items-center gap-2">
-                              <MapPin className="w-4 h-4" />
-                              {order.address}
-                            </p>
+                            <div className="text-[11px] text-slate-500 flex items-center gap-1 pt-1 border-t border-slate-200/50">
+                              <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+                              <span className="truncate">{order.address}</span>
+                            </div>
                           )}
-                          <div className="inline-flex items-center gap-2 bg-red-50 text-primary px-3 py-1 rounded-lg text-xs font-bold">
-                            {order.type === 'delivery' ? 'توصيل للمنزل' : 'استلام من المطعم'}
+                        </div>
+
+                        {/* 3. Compact Ordered Items List */}
+                        <div className="space-y-1.5 pt-0.5">
+                          <div className="flex items-center justify-between text-[11px] font-bold text-slate-400 mb-1">
+                            <span>الأصناف المطلوبة</span>
+                            <span>{totalItemsCount} قطع</span>
+                          </div>
+                          <div className="space-y-1 max-h-48 overflow-y-auto pr-0.5 scrollbar-thin">
+                            {(order.items || []).map((item) => (
+                              <div key={item.id} className="flex justify-between items-start text-xs py-1 border-b border-slate-50 last:border-0 gap-2">
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <span className="w-5 h-5 rounded bg-slate-100 text-slate-700 font-bold flex items-center justify-center text-[10px] shrink-0">
+                                      {item.quantity}×
+                                    </span>
+                                    <span className="font-semibold text-slate-900 text-xs truncate">{item.name_ar}</span>
+                                  </div>
+                                  <div className="mr-7 space-y-0.5 mt-0.5">
+                                    {item.selected_option_ids && item.selected_option_ids.length > 0 && (
+                                      <p className="text-[10px] text-slate-500 leading-tight">
+                                        إضافات: {item.selected_option_ids.map((id: string) => optionNames.get(id)).filter(Boolean).join('، ')}
+                                      </p>
+                                    )}
+                                    {item.special_instructions && (
+                                      <p className="text-[10px] text-slate-400 font-medium italic">
+                                        — {item.special_instructions}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                                <span className="font-bold text-xs text-slate-900 shrink-0">{item.unit_price * item.quantity} ج.م</span>
+                              </div>
+                            ))}
                           </div>
                         </div>
                       </div>
 
-                      <div className="space-y-4">
-                        <h4 className="font-bold text-slate-700 text-sm uppercase tracking-wider">الأصناف المطلوبة</h4>
-                        <div className="space-y-3">
-                          {order.items.map((item) => (
-                            <div key={item.id} className="flex justify-between items-start text-slate-800">
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-3">
-                                  <span className="bg-slate-100 text-slate-700 w-8 h-8 rounded-lg flex items-center justify-center font-bold">
-                                    {item.quantity}
-                                  </span>
-                                  <span className="font-semibold text-sm">{item.name_ar}</span>
-                                </div>
-                                <div className="mr-11 space-y-0.5 mt-0.5">
-                                  {item.selected_option_ids && item.selected_option_ids.length > 0 && (
-                                    <p className="text-[10px] text-slate-500 font-medium">
-                                      إضافات: {item.selected_option_ids.map((id: string) => optionNames.get(id)).filter(Boolean).join('، ')}
-                                    </p>
-                                  )}
-                                  {item.special_instructions && (
-                                    <p className="text-[10px] text-slate-400 font-medium">
-                                      — {item.special_instructions}
-                                    </p>
-                                  )}
-                                </div>
-                              </div>
-                              <span className="font-bold text-sm mt-1">{item.unit_price * item.quantity} ج.م</span>
-                            </div>
-                          ))}
-                          <div className="border-t pt-3 mt-3 flex justify-between items-center text-lg font-black text-slate-900">
-                            <span>الإجمالي</span>
-                            <span>{order.total} ج.م</span>
-                          </div>
+                      {/* 4. Card Footer: Total Price + Status Action Buttons pinned at bottom */}
+                      <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-3">
+                        <div className="flex flex-col">
+                          <span className="text-[10px] text-slate-400 font-bold">الإجمالي</span>
+                          <span className="text-base font-black text-slate-900 leading-none">
+                            {order.total} <span className="text-xs font-bold text-slate-400">ج.م</span>
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          {order.status === 'new' && (
+                            <button
+                              onClick={() => updateOrderStatus(order.id, 'preparing')}
+                              className="bg-primary text-white px-3.5 py-1.5 rounded-xl font-bold text-xs hover:bg-red-700 transition-all shadow-sm shadow-red-100 whitespace-nowrap"
+                            >
+                              بدء التحضير
+                            </button>
+                          )}
+                          {order.status === 'preparing' && (
+                            <button
+                              onClick={() => updateOrderStatus(order.id, order.type === 'delivery' ? 'out_for_delivery' : 'ready')}
+                              className="bg-orange-500 text-white px-3.5 py-1.5 rounded-xl font-bold text-xs hover:bg-orange-600 transition-all shadow-sm shadow-orange-100 whitespace-nowrap"
+                            >
+                              {order.type === 'delivery' ? 'خروج للتوصيل' : 'جاهز للاستلام'}
+                            </button>
+                          )}
+                          {order.status === 'ready' && order.type === 'delivery' && (
+                            <button
+                              onClick={() => updateOrderStatus(order.id, 'out_for_delivery')}
+                              className="bg-teal-600 text-white px-3.5 py-1.5 rounded-xl font-bold text-xs hover:bg-teal-700 transition-all shadow-sm shadow-teal-100 whitespace-nowrap"
+                            >
+                              خروج للتوصيل
+                            </button>
+                          )}
+                          {(order.status === 'ready' || order.status === 'out_for_delivery') && (
+                            <button
+                              onClick={() => updateOrderStatus(order.id, 'completed')}
+                              className="bg-green-600 text-white px-3.5 py-1.5 rounded-xl font-bold text-xs hover:bg-green-700 transition-all shadow-sm shadow-green-100 whitespace-nowrap"
+                            >
+                              تم التسليم
+                            </button>
+                          )}
+                          {order.status === 'completed' && (
+                            <span className="text-xs font-bold text-green-700 bg-green-50 px-2.5 py-1 rounded-lg border border-green-200 flex items-center gap-1">
+                              <CheckCircle className="w-3.5 h-3.5" />
+                              مكتمل
+                            </span>
+                          )}
+                          {order.status === 'cancelled' && (
+                            <span className="text-xs font-bold text-red-700 bg-red-50 px-2.5 py-1 rounded-lg border border-red-200">
+                              ملغي
+                            </span>
+                          )}
                         </div>
                       </div>
-                    </div>
-                  </motion.div>
-                ))
+                    </motion.div>
+                  );
+                })
               )}
             </div>
           </div>
@@ -471,7 +941,7 @@ export const AdminView: React.FC = () => {
               ))}
             </div>
           </div>
-        ) : (
+        ) : activeTab === 'controls' ? (
           /* ── OPERATIONAL CONTROLS TAB ─────────────────── */
           <div className="space-y-8">
             <div className="flex justify-between items-center">
@@ -480,7 +950,7 @@ export const AdminView: React.FC = () => {
                   <Settings2 className="w-6 h-6 text-primary" />
                   التحكم التشغيلي
                 </h2>
-                <p className="text-slate-500 text-sm mt-1">إدارة حالة الموقع والأقسام وقواعد الحد الأدنى للطلب</p>
+                <p className="text-slate-500 text-sm mt-1">إدارة حالة الموقع وقواعد الحد الأدنى للطلب</p>
               </div>
             </div>
 
@@ -532,59 +1002,7 @@ export const AdminView: React.FC = () => {
               </div>
             </div>
 
-            {/* ── Section 2: Category Controls ─────────────── */}
-            <div className="bg-white rounded-2xl p-6 md:p-8 border border-slate-100 shadow-sm space-y-6">
-              <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
-                <Utensils className="w-5 h-5 text-primary" />
-                <h3 className="text-xl font-bold text-slate-900">الأقسام</h3>
-                <span className="text-xs bg-slate-100 text-slate-500 px-2 py-1 rounded-full font-bold">{categories.length} قسم</span>
-              </div>
-
-              <div className="space-y-3">
-                {categories.map((cat) => (
-                  <div
-                    key={cat.id}
-                    className={clsx(
-                      "flex items-center justify-between p-4 rounded-xl border transition-all",
-                      cat.is_active
-                        ? "bg-white border-slate-100 hover:border-green-200"
-                        : "bg-slate-50 border-slate-200 opacity-70"
-                    )}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className={clsx(
-                        "w-3 h-3 rounded-full",
-                        cat.is_active ? "bg-green-500 animate-pulse" : "bg-slate-400"
-                      )} />
-                      <div>
-                        <span className="font-bold text-slate-900">{cat.name_ar}</span>
-                        <span className="text-xs text-slate-400 mr-2">({cat.name_en})</span>
-                      </div>
-                    </div>
-                    <button
-                      onClick={async () => {
-                        await toggleCategoryActive(cat.id);
-                        toast.success(cat.is_active ? `تم إيقاف "${cat.name_ar}"` : `تم تفعيل "${cat.name_ar}"`);
-                      }}
-                      className={clsx(
-                        "flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-xs transition-all active:scale-95",
-                        cat.is_active
-                          ? "bg-green-50 text-green-700 hover:bg-green-100 border border-green-200"
-                          : "bg-slate-100 text-slate-500 hover:bg-slate-200 border border-slate-200"
-                      )}
-                    >
-                      {cat.is_active ? (
-                        <><ToggleRight className="w-4 h-4" /> مفعّل</>
-                      ) : (
-                        <><ToggleLeft className="w-4 h-4" /> متوقف</>
-                      )}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* ── Section 3: Minimum Quantity Rules ────────── */}
+            {/* ── Section 2: Minimum Quantity Rules ────────── */}
             <div className="bg-white rounded-2xl p-6 md:p-8 border border-slate-100 shadow-sm space-y-6">
               <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
                 <Hash className="w-5 h-5 text-primary" />
@@ -635,6 +1053,306 @@ export const AdminView: React.FC = () => {
                 )}
                 حفظ الإعدادات
               </button>
+            </div>
+          </div>
+        ) : (
+          /* ── ANALYTICS & SALES TAB ─────────────────────── */
+          <div className="space-y-8">
+            <div className="flex justify-between items-center">
+              <div>
+                <h2 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
+                  <BarChart3 className="w-6 h-6 text-primary" />
+                  إحصائيات المبيعات
+                </h2>
+                <p className="text-slate-500 text-sm mt-1">متابعة أداء المبيعات اليومية والشهرية والأصناف الأكثر والأقل طلباً</p>
+              </div>
+            </div>
+
+            {/* ── 5 Summary Cards Grid ──────────────────────── */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 md:gap-5">
+              {/* Card 1: مبيعات النهاردة */}
+              <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm flex flex-col justify-between">
+                <div className="flex items-center justify-between mb-4">
+                  <span className="text-sm font-bold text-slate-500">مبيعات النهاردة</span>
+                  <div className="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center text-primary">
+                    <TrendingUp className="w-5 h-5" />
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  <div className="text-2xl font-black text-slate-900 flex items-baseline gap-1">
+                    {todayStats.revenue.toLocaleString('ar-EG')}
+                    <span className="text-sm font-bold text-slate-400">ج.م</span>
+                  </div>
+                  <div className="flex items-center">
+                    <span className={clsx(
+                      "text-xs px-2.5 py-1 rounded-full font-bold flex items-center gap-1.5",
+                      todayStats.count > 0
+                        ? "bg-green-100 text-green-700 border border-green-200"
+                        : "bg-slate-100 text-slate-500"
+                    )}>
+                      <div className={clsx("w-1.5 h-1.5 rounded-full", todayStats.count > 0 ? "bg-green-500" : "bg-slate-400")} />
+                      {todayStats.count} {todayStats.count === 1 ? 'طلب اليوم' : 'طلبات اليوم'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 2: مبيعات الشهر ده */}
+              <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm flex flex-col justify-between">
+                <div className="flex items-center justify-between mb-4">
+                  <span className="text-sm font-bold text-slate-500">مبيعات الشهر ده</span>
+                  <div className="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center text-primary">
+                    <BarChart3 className="w-5 h-5" />
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  <div className="text-2xl font-black text-slate-900 flex items-baseline gap-1">
+                    {monthStats.revenue.toLocaleString('ar-EG')}
+                    <span className="text-sm font-bold text-slate-400">ج.م</span>
+                  </div>
+                  <div className="flex items-center">
+                    <span className="text-xs bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full font-bold">
+                      {monthStats.count} {monthStats.count === 1 ? 'طلب هذا الشهر' : 'طلبات هذا الشهر'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 3: الأكثر مبيعاً في المنيو */}
+              <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm flex flex-col justify-between">
+                <div className="flex items-center justify-between mb-4">
+                  <span className="text-sm font-bold text-slate-500">الأكثر مبيعاً في المنيو</span>
+                  <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600">
+                    <Flame className="w-5 h-5" />
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <h4 className="font-bold text-base text-slate-900 line-clamp-1">
+                      {bestSeller ? bestSeller.name_ar : 'لا توجد مبيعات بعد'}
+                    </h4>
+                    {bestSeller?.name_en && (
+                      <p className="text-xs text-slate-400 mt-0.5 line-clamp-1">{bestSeller.name_en}</p>
+                    )}
+                  </div>
+                  <div className="flex items-center">
+                    <span className={clsx(
+                      "text-xs px-2.5 py-1 rounded-full font-bold",
+                      bestSeller && bestSeller.unitsSold > 0
+                        ? "bg-amber-100 text-amber-800 border border-amber-200"
+                        : "bg-slate-100 text-slate-500"
+                    )}>
+                      {bestSeller && bestSeller.unitsSold > 0 ? `تم بيع ${bestSeller.unitsSold} قطعة` : '0 مبيعات'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 4: الأقل مبيعاً في المنيو */}
+              <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm flex flex-col justify-between">
+                <div className="flex items-center justify-between mb-4">
+                  <span className="text-sm font-bold text-slate-500">الأقل مبيعاً في المنيو</span>
+                  <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-600">
+                    <ShoppingBag className="w-5 h-5" />
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <h4 className="font-bold text-base text-slate-900 line-clamp-1">
+                      {leastSeller ? leastSeller.name_ar : 'لا توجد مبيعات بعد'}
+                    </h4>
+                    {leastSeller?.name_en && (
+                      <p className="text-xs text-slate-400 mt-0.5 line-clamp-1">{leastSeller.name_en}</p>
+                    )}
+                  </div>
+                  <div className="flex items-center">
+                    <span className="text-xs bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full font-bold">
+                      {leastSeller ? `تم بيع ${leastSeller.unitsSold} قطعة` : '0 مبيعات'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 5: الأكثر طلباً في الصوصات */}
+              <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm flex flex-col justify-between">
+                <div className="flex items-center justify-between mb-4">
+                  <span className="text-sm font-bold text-slate-500">الأكثر طلباً في الصوصات</span>
+                  <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-blue-500">
+                    <Droplets className="w-5 h-5" />
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <h4 className="font-bold text-base text-slate-900 line-clamp-1">
+                      {topSauce ? topSauce.name_ar : 'لا توجد بيانات'}
+                    </h4>
+                    {topSauce && topSauce.priceDelta > 0 && (
+                      <p className="text-xs text-slate-400 mt-0.5">{topSauce.priceDelta}+ ج.م</p>
+                    )}
+                  </div>
+                  <div className="flex items-center">
+                    <span className={clsx(
+                      "text-xs px-2.5 py-1 rounded-full font-bold",
+                      topSauce
+                        ? "bg-blue-100 text-blue-800 border border-blue-200"
+                        : "bg-slate-100 text-slate-500"
+                    )}>
+                      {topSauce ? `تم طلبه ${topSauce.orderCount} مرة` : '0 مرة'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* ── Ranking cards: Menu items + Sauces side by side on lg ── */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+              {/* ── Menu Items Sales Ranking ─────────────── */}
+              <div className="bg-white rounded-2xl p-6 md:p-8 border border-slate-100 shadow-sm space-y-6">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                  <div className="flex items-center gap-3">
+                    <Layers className="w-5 h-5 text-primary" />
+                    <h3 className="text-lg font-bold text-slate-900">ترتيب أصناف المنيو حسب المبيعات</h3>
+                  </div>
+                  <span className="text-xs bg-slate-100 text-slate-500 px-3 py-1 rounded-full font-bold">
+                    {productSales.length} صنف
+                  </span>
+                </div>
+
+                {productSales.length === 0 ? (
+                  <div className="text-center py-12 text-slate-400 font-medium">
+                    لا توجد أصناف في قائمة الطعام
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {productSales.map((item, idx) => (
+                      <div
+                        key={item.id}
+                        className="flex items-center justify-between p-4 rounded-xl border border-slate-100 bg-slate-50 hover:bg-white hover:border-slate-200 transition-all gap-4"
+                      >
+                        {/* Right side: Rank + Image + Name */}
+                        <div className="flex items-center gap-3 min-w-0">
+                          <span className={clsx(
+                            "w-7 h-7 rounded-lg flex items-center justify-center text-xs font-black shrink-0",
+                            idx === 0
+                              ? "bg-amber-100 text-amber-800 border border-amber-300"
+                              : idx === 1
+                              ? "bg-slate-200 text-slate-700"
+                              : idx === 2
+                              ? "bg-amber-50 text-amber-900 border border-amber-200"
+                              : "bg-white text-slate-500 border border-slate-200"
+                          )}>
+                            #{idx + 1}
+                          </span>
+
+                          {item.image_url ? (
+                            <img
+                              src={item.image_url}
+                              alt={item.name_ar}
+                              className="w-10 h-10 rounded-lg object-cover shrink-0 border border-slate-200"
+                              loading="lazy"
+                            />
+                          ) : (
+                            <div className="w-10 h-10 rounded-lg bg-slate-200 flex items-center justify-center text-slate-400 shrink-0">
+                              <Utensils className="w-5 h-5" />
+                            </div>
+                          )}
+
+                          <div className="min-w-0">
+                            <p className="font-bold text-slate-900 text-sm truncate">{item.name_ar}</p>
+                            {item.name_en && (
+                              <p className="text-xs text-slate-400 truncate">{item.name_en}</p>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Left side: Badges */}
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-xs bg-slate-100 text-slate-600 px-2.5 py-1.5 rounded-full font-bold whitespace-nowrap">
+                            {item.unitsSold > 0 ? `تم بيع ${item.unitsSold} قطعة` : 'لم يتم البيع'}
+                          </span>
+                          <span className="text-sm font-bold text-primary bg-red-50 px-2.5 py-1 rounded-lg whitespace-nowrap">
+                            {item.revenue.toLocaleString('ar-EG')} ج.م
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* ── Sauces Ranking ──────────────────────────── */}
+              <div className="bg-white rounded-2xl p-6 md:p-8 border border-slate-100 shadow-sm space-y-6">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                  <div className="flex items-center gap-3">
+                    <Droplets className="w-5 h-5 text-blue-500" />
+                    <h3 className="text-lg font-bold text-slate-900">ترتيب الصوصات حسب الطلب</h3>
+                  </div>
+                  <span className="text-xs bg-slate-100 text-slate-500 px-3 py-1 rounded-full font-bold">
+                    {sauceSales.length} صوص
+                  </span>
+                </div>
+
+                {sauceSales.length === 0 ? (
+                  <div className="text-center py-12 text-slate-400 font-medium">
+                    لا توجد بيانات صوصات
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {sauceSales.map((sauce, idx) => (
+                      <div
+                        key={sauce.name_ar}
+                        className="flex items-center justify-between p-4 rounded-xl border border-slate-100 bg-slate-50 hover:bg-white hover:border-slate-200 transition-all gap-4"
+                      >
+                        {/* Right side: Rank + Icon + Name */}
+                        <div className="flex items-center gap-3 min-w-0">
+                          <span className={clsx(
+                            "w-7 h-7 rounded-lg flex items-center justify-center text-xs font-black shrink-0",
+                            idx === 0
+                              ? "bg-amber-100 text-amber-800 border border-amber-300"
+                              : idx === 1
+                              ? "bg-slate-200 text-slate-700"
+                              : idx === 2
+                              ? "bg-amber-50 text-amber-900 border border-amber-200"
+                              : "bg-white text-slate-500 border border-slate-200"
+                          )}>
+                            #{idx + 1}
+                          </span>
+
+                          <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center text-blue-400 shrink-0">
+                            <Droplets className="w-5 h-5" />
+                          </div>
+
+                          <div className="min-w-0">
+                            <p className="font-bold text-slate-900 text-sm truncate">{sauce.name_ar}</p>
+                            {sauce.priceDelta > 0 && (
+                              <p className="text-xs text-slate-400">+{sauce.priceDelta} ج.م</p>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Left side: Badges */}
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className={clsx(
+                            "text-xs px-2.5 py-1.5 rounded-full font-bold whitespace-nowrap",
+                            sauce.orderCount > 0
+                              ? "bg-blue-100 text-blue-700 border border-blue-200"
+                              : "bg-slate-100 text-slate-500"
+                          )}>
+                            {sauce.orderCount > 0 ? `تم طلبه ${sauce.orderCount} مرة` : 'لم يتم الطلب'}
+                          </span>
+                          {sauce.revenue > 0 && (
+                            <span className="text-sm font-bold text-primary bg-red-50 px-2.5 py-1 rounded-lg whitespace-nowrap">
+                              {sauce.revenue.toLocaleString('ar-EG')} ج.م
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
             </div>
           </div>
         )}

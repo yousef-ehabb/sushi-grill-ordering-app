@@ -30,11 +30,7 @@ export const productsService = {
     }
 
     try {
-      const q = query(
-        collection(db, PRODUCTS_COLLECTION),
-        where('is_available', '==', true)
-      );
-      const snapshot = await getDocs(q);
+      const snapshot = await getDocs(collection(db, PRODUCTS_COLLECTION));
 
       if (snapshot.empty) {
         console.warn('[Firestore] No products found in Firestore, falling back to mock');

@@ -193,10 +193,15 @@ export const useStore = create<AppState>()(
       fetchCategories: async () => {
         try {
           const categories = await categoriesService.getCategories();
-          set({ categories });
+          // Ensure all menu categories remain active/enabled by default
+          const safeCategories = (categories && categories.length > 0 ? categories : INITIAL_CATEGORIES).map(c => ({
+            ...c,
+            is_active: true,
+          }));
+          set({ categories: safeCategories });
         } catch (err) {
           console.warn('Error fetching categories, fallback to initial categories:', err);
-          set({ categories: INITIAL_CATEGORIES });
+          set({ categories: INITIAL_CATEGORIES.map(c => ({ ...c, is_active: true })) });
         }
       },
 
