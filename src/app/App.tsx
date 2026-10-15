@@ -12,10 +12,11 @@ import { AccountPage } from './components/auth/AccountPage';
 import { OrderDetailPage } from './components/auth/OrderDetailPage';
 import { AuthGuard } from './components/auth/AuthGuard';
 import { ActiveOrderModal } from './components/ActiveOrderModal';
+import { Footer } from './components/Footer';
 import { useStore } from './store/useStore';
 import { useAuthStore } from './store/useAuthStore';
 import { restaurantConfig } from '../config/restaurant';
-import { ShoppingBag, UtensilsCrossed, Phone, XCircle, User, LogIn, ClipboardList, MapPin, Flame } from 'lucide-react';
+import { ShoppingBag, UtensilsCrossed, Phone, XCircle, User, LogIn, ClipboardList, Flame } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -281,88 +282,8 @@ const CustomerLayout: React.FC = () => {
         <CustomerView />
       </main>
 
-      {/* Footer */}
-      <footer className="bg-slate-950 text-slate-300 py-16 px-4 mt-20 border-t border-slate-900">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-12 text-right">
-            {/* Brand Column */}
-            <div className="space-y-4">
-              <div className="inline-flex items-center gap-3">
-                <img
-                  src={restaurantConfig.brand.logoUrl}
-                  alt={restaurantConfig.brand.nameAr}
-                  className="w-12 h-12 object-contain rounded-2xl shadow-lg border-2 border-amber-400 bg-[#140606]"
-                />
-                <div>
-                  <h3 className="text-2xl font-black text-white">{restaurantConfig.brand.nameAr}</h3>
-                  <span className="text-xs font-bold text-amber-400">{restaurantConfig.brand.taglineAr}</span>
-                </div>
-              </div>
-              <p className="text-sm text-slate-400 leading-relaxed max-w-sm">
-                ساندوتشات برجر اللحم البلدي الطازج وقطع الفرايد تشيكن المقرمشة المحضرة بأعلى معايير الجودة والنظافة.
-              </p>
-              <div className="flex items-center gap-3 pt-2">
-                <a
-                  href={restaurantConfig.social.instagramUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="bg-slate-900 hover:bg-primary text-slate-300 hover:text-white px-3 py-1.5 rounded-xl text-xs font-bold transition-all border border-slate-800"
-                >
-                  Instagram: @{restaurantConfig.social.instagram}
-                </a>
-                <a
-                  href={restaurantConfig.social.facebookUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="bg-slate-900 hover:bg-primary text-slate-300 hover:text-white px-3 py-1.5 rounded-xl text-xs font-bold transition-all border border-slate-800"
-                >
-                  Facebook: {restaurantConfig.social.facebook}
-                </a>
-              </div>
-            </div>
-
-            {/* Branches & Phone Numbers */}
-            <div className="space-y-4">
-              <h3 className="text-white font-bold text-lg flex items-center gap-2">
-                <MapPin className="w-5 h-5 text-primary" />
-                فروعنا وأرقام الطلبات
-              </h3>
-              <div className="space-y-3 text-sm">
-                {restaurantConfig.contact.branches.map((branch) => (
-                  <div key={branch.id} className="bg-slate-900/60 p-3 rounded-xl border border-slate-800/80">
-                    <span className="font-bold text-amber-400 block mb-1">{branch.name_ar}</span>
-                    <div className="flex flex-wrap gap-2">
-                      {branch.phones.map((phone) => (
-                        <a
-                          key={phone}
-                          href={`tel:${phone}`}
-                          className="text-slate-300 hover:text-primary transition-colors font-mono font-medium dir-ltr"
-                        >
-                          {phone}
-                        </a>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Working Hours & Policies */}
-            <div className="flex flex-col justify-between space-y-4">
-              <div>
-                <h3 className="text-white font-bold text-lg mb-2">مواعيد العمل</h3>
-                <p className="text-sm text-slate-400 leading-relaxed">
-                  يومياً من 12:00 ظهراً حتى 02:00 صباحاً.<br />
-                  خدمة التوصيل والاستلام متوفرة طوال ساعات العمل.
-                </p>
-              </div>
-              <div className="border-t border-slate-900 pt-4 text-xs text-slate-500">
-                &copy; {new Date().getFullYear()} {restaurantConfig.brand.nameAr}. جميع الحقوق محفوظة.
-              </div>
-            </div>
-          </div>
-        </div>
-      </footer>
+      {/* Modern Redesigned Footer */}
+      <Footer />
 
       {/* Modals */}
       <CartSidebar
