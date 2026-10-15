@@ -11,6 +11,25 @@ interface CheckoutModalProps {
   onClose: () => void;
 }
 
+const EGYPTIAN_PHONE_REGEX = /^01[0125][0-9]{8}$/;
+
+const sanitizeEgyptianPhone = (value: string): string => {
+  // Convert Eastern Arabic numerals (٠-٩) to standard English digits (0-9)
+  let cleaned = value.replace(/[٠-٩]/g, (d) => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString());
+  // Remove spaces, dashes, parentheses, plus
+  cleaned = cleaned.replace(/[\s\-\(\)\+]/g, '');
+  // Normalize pasted Egyptian numbers with international prefix
+  if (cleaned.startsWith('00201')) {
+    cleaned = '0' + cleaned.slice(4);
+  } else if (cleaned.startsWith('201') && cleaned.length > 11) {
+    cleaned = '0' + cleaned.slice(2);
+  }
+  // Strip out any non-numeric characters
+  cleaned = cleaned.replace(/\D/g, '');
+  // Strictly enforce maximum 11 digits
+  return cleaned.slice(0, 11);
+};
+
 export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose }) => {
   const { cart, products, globalSettings, orderType, setOrderType, clearCart, submitOrder, loading } = useStore();
   const { user, isAuthenticated } = useAuthStore();
@@ -21,13 +40,21 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
     address: '',
   });
 
+  const isValidPhone = EGYPTIAN_PHONE_REGEX.test(formData.phone);
+  const isPhoneTouchedOrFilled = formData.phone.length > 0;
+  const isPhoneInvalid = isPhoneTouchedOrFilled && !isValidPhone;
+
+  const isNameValid = formData.name.trim().length > 0;
+  const isAddressValid = orderType === 'delivery' ? formData.address.trim().length > 0 : true;
+  const isFormValid = isNameValid && isValidPhone && isAddressValid;
+
   const isWebsiteClosed = globalSettings && !globalSettings.is_website_open;
   const unavailableCartItems = cart.filter(item => {
     const p = products.find(prod => prod.id === item.id);
     return (p && !p.is_available) || !item.is_available;
   });
   const hasUnavailableItems = unavailableCartItems.length > 0;
-  const isSubmitDisabled = loading || !orderType || !!isWebsiteClosed || hasUnavailableItems || cart.length === 0;
+  const isSubmitDisabled = loading || !orderType || !!isWebsiteClosed || hasUnavailableItems || cart.length === 0 || !isFormValid;
 
   // Auto-close if cart becomes empty in real-time (e.g. item removed)
   useEffect(() => {
@@ -41,7 +68,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
     if (isOpen && isAuthenticated && user) {
       setFormData((prev) => ({
         name: prev.name || user.name || '',
-        phone: prev.phone || user.phone || '',
+        phone: prev.phone ? sanitizeEgyptianPhone(prev.phone) : (user.phone ? sanitizeEgyptianPhone(user.phone) : ''),
         address: prev.address || user.address || '',
       }));
     }
@@ -62,7 +89,12 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSubmitDisabled) return;
+    if (isSubmitDisabled || !isValidPhone) {
+      if (!isValidPhone) {
+        toast.error('يرجى إدخال رقم هاتف صحيح مكون من 11 رقم يبدأ بـ 01');
+      }
+      return;
+    }
 
     const orderId = await submitOrder({
       customer_name: formData.name,
@@ -204,19 +236,43 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
                       </div>
 
                       <div className="space-y-1">
-                        <label className="text-xs sm:text-sm font-bold text-slate-700 flex items-center gap-1.5">
-                          <Phone className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-400" />
-                          رقم الهاتف
-                        </label>
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs sm:text-sm font-bold text-slate-700 flex items-center gap-1.5">
+                            <Phone className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-400" />
+                            رقم الهاتف
+                          </label>
+                          {formData.phone.length > 0 && (
+                            <span className={clsx(
+                              "text-[11px] font-mono",
+                              isValidPhone ? "text-emerald-600 font-bold" : "text-slate-400"
+                            )}>
+                              {formData.phone.length}/11
+                            </span>
+                          )}
+                        </div>
                         <input
                           required
                           type="tel"
+                          inputMode="numeric"
+                          maxLength={11}
                           placeholder="01xxxxxxxxx"
-                          className="w-full px-3.5 py-3 sm:px-4 sm:py-3.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all placeholder:text-slate-300 font-medium text-sm text-left"
+                          className={clsx(
+                            "w-full px-3.5 py-3 sm:px-4 sm:py-3.5 bg-white border rounded-xl outline-none transition-all placeholder:text-slate-300 font-medium text-sm text-left tracking-wider font-mono",
+                            isPhoneInvalid
+                              ? "border-red-400 focus:border-red-500 focus:ring-2 focus:ring-red-100"
+                              : isValidPhone
+                              ? "border-emerald-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                              : "border-slate-200 focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                          )}
                           dir="ltr"
                           value={formData.phone}
-                          onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                          onChange={(e) => setFormData({ ...formData, phone: sanitizeEgyptianPhone(e.target.value) })}
                         />
+                        {isPhoneInvalid && (
+                          <p className="text-xs text-red-500 font-medium pt-0.5">
+                            يرجى إدخال رقم هاتف صحيح مكون من 11 رقم يبدأ بـ 01
+                          </p>
+                        )}
                       </div>
 
                       <AnimatePresence>
