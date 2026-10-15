@@ -4,7 +4,8 @@ import { doc, updateDoc, collection, getDocs, query, where, addDoc, deleteDoc, s
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, isFirebaseConfigured } from '../../lib/firebase';
 import { getStorage } from 'firebase/storage';
-import { computeOptionsPrice } from '../utils/price';
+import { toast } from 'sonner';
+import { broadcastSyncEvent } from '../utils/realtimeSync';
 import {
   categoriesService,
   productsService,
@@ -141,6 +142,12 @@ interface AppState {
   fetchGlobalSettings: () => Promise<void>;
   fetchBusinessRules: () => Promise<void>;
 
+  // Real-Time Sync Setters
+  setProducts: (products: Product[]) => void;
+  setGlobalSettings: (settings: GlobalSettings) => void;
+  updateProductAvailabilityLocal: (productId: string, is_available: boolean) => void;
+  updateGlobalSettingsLocal: (data: Partial<GlobalSettings>) => void;
+
   // Cart Actions
   setOrderType: (type: 'pickup' | 'delivery') => void;
   addToCart: (product: Product) => void;
@@ -205,13 +212,59 @@ export const useStore = create<AppState>()(
         }
       },
 
+      // ── Real-Time Sync Setters ──────────────────────────────
+
+      setProducts: (products: Product[]) => {
+        const currentCart = get().cart;
+        const unavailableInCart: CartItem[] = [];
+        const validCart: CartItem[] = [];
+
+        for (const item of currentCart) {
+          const matched = products.find((p) => p.id === item.id);
+          if (matched && !matched.is_available) {
+            unavailableInCart.push(item);
+          } else {
+            validCart.push(item);
+          }
+        }
+
+        if (unavailableInCart.length > 0) {
+          set({ products, cart: validCart });
+          unavailableInCart.forEach((item) => {
+            toast.error('صنف غير متاح حالياً', {
+              description: `عذراً، الصنف "${item.name_ar}" أصبح غير متاح حالياً وتمت إزالته من سلتك.`,
+              duration: 6000,
+            });
+          });
+        } else {
+          set({ products });
+        }
+      },
+
+      setGlobalSettings: (globalSettings: GlobalSettings) => {
+        set({ globalSettings });
+      },
+
+      updateProductAvailabilityLocal: (productId: string, is_available: boolean) => {
+        const updatedProducts = get().products.map((p) =>
+          p.id === productId ? { ...p, is_available } : p
+        );
+        get().setProducts(updatedProducts);
+      },
+
+      updateGlobalSettingsLocal: (data: Partial<GlobalSettings>) => {
+        const current = get().globalSettings;
+        if (!current) return;
+        set({ globalSettings: { ...current, ...data } });
+      },
+
       fetchProducts: async () => {
         try {
           const products = await productsService.getProducts();
-          set({ products });
+          get().setProducts(products);
         } catch (err) {
           console.warn('Error fetching products, fallback to initial products:', err);
-          set({ products: INITIAL_PRODUCTS });
+          get().setProducts(INITIAL_PRODUCTS);
         }
       },
 
@@ -397,6 +450,58 @@ export const useStore = create<AppState>()(
         set({ loading: true, error: null });
 
         try {
+          // ── Strict Pre-Checkout Validation 1: Fresh Site Status ──
+          let freshSettings = get().globalSettings;
+          if (isFirebaseConfigured() && db) {
+            try {
+              freshSettings = await settingsService.getGlobalSettings();
+              set({ globalSettings: freshSettings });
+            } catch (settingsErr) {
+              console.warn('[Validation] Could not fetch fresh settings:', settingsErr);
+            }
+          }
+
+          if (freshSettings && !freshSettings.is_website_open) {
+            const errorMsg = freshSettings.closed_message || 'عذراً، المطعم مغلق حالياً ولا يستقبل طلبات جديدة.';
+            set({ loading: false, error: errorMsg });
+            return null;
+          }
+
+          // ── Strict Pre-Checkout Validation 2: Fresh Product Availability ──
+          let freshProducts = get().products;
+          if (isFirebaseConfigured() && db) {
+            try {
+              freshProducts = await productsService.getProducts();
+              get().setProducts(freshProducts);
+            } catch (prodErr) {
+              console.warn('[Validation] Could not fetch fresh products:', prodErr);
+            }
+          }
+
+          const unavailableItems: string[] = [];
+          for (const item of orderData.items) {
+            const prod = freshProducts.find((p) => p.id === item.id);
+            if (!prod || !prod.is_available) {
+              unavailableItems.push(item.name_ar);
+            }
+          }
+
+          if (unavailableItems.length > 0) {
+            // Remove unavailable items from the cart automatically
+            const cleanedCart = get().cart.filter((cartItem) => {
+              const prod = freshProducts.find((p) => p.id === cartItem.id);
+              return prod && prod.is_available;
+            });
+            const errorMsg = `عذراً، الصنف "${unavailableItems.join('، ')}" أصبح غير متاح حالياً وتم تعديل سلتك.`;
+            set({ cart: cleanedCart, loading: false, error: errorMsg });
+            return null;
+          }
+
+          if (orderData.items.length === 0) {
+            set({ loading: false, error: 'سلة المشتريات فارغة' });
+            return null;
+          }
+
           const clientComputedTotal = orderData.items.reduce((sum, item) => {
             const itemTotal = (item.price + (item.optionsPrice || 0)) * item.quantity;
             return sum + itemTotal;
@@ -495,22 +600,19 @@ export const useStore = create<AppState>()(
         if (!product) return;
 
         const newValue = !product.is_available;
+        get().updateProductAvailabilityLocal(productId, newValue);
 
-        set((state) => ({
-          products: state.products.map((p) =>
-            p.id === productId ? { ...p, is_available: newValue } : p
-          ),
-        }));
+        broadcastSyncEvent({
+          type: 'PRODUCT_AVAILABILITY_CHANGED',
+          productId,
+          is_available: newValue,
+        });
 
         if (!isFirebaseConfigured() || !db) return;
         try {
           await updateDoc(doc(db, 'products', productId), { is_available: newValue });
         } catch (error) {
-          set((state) => ({
-            products: state.products.map((p) =>
-              p.id === productId ? { ...p, is_available: !newValue } : p
-            ),
-          }));
+          get().updateProductAvailabilityLocal(productId, !newValue);
           console.error('Failed to toggle availability:', error);
         }
       },
@@ -531,11 +633,25 @@ export const useStore = create<AppState>()(
       },
 
       updateProduct: async (id, data) => {
-        set((state) => ({
-          products: state.products.map((p) =>
-            p.id === id ? { ...p, ...data } : p
-          ),
-        }));
+        const currentProducts = get().products;
+        const updated = currentProducts.map((p) =>
+          p.id === id ? { ...p, ...data } : p
+        );
+        get().setProducts(updated);
+
+        if (data.is_available !== undefined) {
+          broadcastSyncEvent({
+            type: 'PRODUCT_AVAILABILITY_CHANGED',
+            productId: id,
+            is_available: data.is_available,
+          });
+        } else {
+          broadcastSyncEvent({
+            type: 'PRODUCT_UPDATED',
+            productId: id,
+            data,
+          });
+        }
 
         if (!isFirebaseConfigured() || !db) return;
         try {
@@ -571,6 +687,11 @@ export const useStore = create<AppState>()(
 
         // Optimistic update
         set({ globalSettings: { ...current, ...data, updated_at: new Date().toISOString() } });
+
+        broadcastSyncEvent({
+          type: 'GLOBAL_SETTINGS_CHANGED',
+          settings: data,
+        });
 
         if (!isFirebaseConfigured() || !db) return;
         try {

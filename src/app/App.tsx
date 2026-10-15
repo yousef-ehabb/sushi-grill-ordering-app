@@ -15,6 +15,8 @@ import { ActiveOrderModal } from './components/ActiveOrderModal';
 import { Footer } from './components/Footer';
 import { useStore } from './store/useStore';
 import { useAuthStore } from './store/useAuthStore';
+import { productsService, settingsService } from '../services/firestore';
+import { subscribeToSyncEvents } from './utils/realtimeSync';
 import { restaurantConfig } from '../config/restaurant';
 import { ShoppingBag, UtensilsCrossed, Phone, XCircle, User, LogIn, ClipboardList, Flame } from 'lucide-react';
 import { Toaster } from 'sonner';
@@ -24,7 +26,18 @@ const CustomerLayout: React.FC = () => {
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [isActiveOrderOpen, setIsActiveOrderOpen] = useState(false);
-  const { cart, globalSettings, fetchGlobalSettings, activeOrder, fetchActiveOrder } = useStore();
+  const {
+    cart,
+    globalSettings,
+    fetchGlobalSettings,
+    fetchProducts,
+    setProducts,
+    setGlobalSettings,
+    updateProductAvailabilityLocal,
+    updateGlobalSettingsLocal,
+    activeOrder,
+    fetchActiveOrder
+  } = useStore();
   const { isAuthenticated, user, initSession } = useAuthStore();
   const isOpen = globalSettings?.is_website_open ?? true;
   const [isScrolled, setIsScrolled] = useState(false);
@@ -33,11 +46,62 @@ const CustomerLayout: React.FC = () => {
     initSession();
   }, []);
 
-  React.useEffect(() => {
-    fetchGlobalSettings();
+  // ── Live Real-Time Subscriptions & Cross-Tab Synchronization ──
+  useEffect(() => {
+    // 1. Live Firestore Subscription for Products (instant database sync)
+    const unsubscribeProducts = productsService.subscribeToProducts((liveProducts) => {
+      setProducts(liveProducts);
+    });
+
+    // 2. Live Firestore Subscription for Global Settings (instant open/close)
+    const unsubscribeSettings = settingsService.subscribeToGlobalSettings((liveSettings) => {
+      setGlobalSettings(liveSettings);
+    });
+
+    // 3. Cross-Tab Live BroadcastChannel & localStorage sync (0ms same-browser sync)
+    const unsubscribeSync = subscribeToSyncEvents((event) => {
+      if (event.type === 'PRODUCT_AVAILABILITY_CHANGED') {
+        updateProductAvailabilityLocal(event.productId, event.is_available);
+      } else if (event.type === 'PRODUCT_UPDATED') {
+        const currentProducts = useStore.getState().products;
+        setProducts(currentProducts.map(p => p.id === event.productId ? { ...p, ...event.data } : p));
+      } else if (event.type === 'GLOBAL_SETTINGS_CHANGED') {
+        updateGlobalSettingsLocal(event.settings);
+      } else if (event.type === 'FORCE_REFRESH') {
+        fetchProducts();
+        fetchGlobalSettings();
+      }
+    });
+
+    // 4. Tab Visibilitychange and Focus Revalidation (when customer returns to tab)
+    const handleRevalidate = () => {
+      if (document.visibilityState === 'visible') {
+        fetchProducts();
+        fetchGlobalSettings();
+      }
+    };
+    document.addEventListener('visibilitychange', handleRevalidate);
+    window.addEventListener('focus', handleRevalidate);
+
+    // 5. Lightweight background polling (every 10s fallback while tab is visible)
+    const pollInterval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchProducts();
+        fetchGlobalSettings();
+      }
+    }, 10_000);
+
+    return () => {
+      unsubscribeProducts();
+      unsubscribeSettings();
+      unsubscribeSync();
+      document.removeEventListener('visibilitychange', handleRevalidate);
+      window.removeEventListener('focus', handleRevalidate);
+      clearInterval(pollInterval);
+    };
   }, []);
 
-  React.useEffect(() => {
+  useEffect(() => {
     const handleScroll = () => setIsScrolled(window.scrollY > 20);
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);

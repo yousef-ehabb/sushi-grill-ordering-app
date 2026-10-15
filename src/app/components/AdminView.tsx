@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore, OrderStatus, Product } from '../store/useStore';
 import { useAuthStore } from '../store/useAuthStore';
-import { ordersService } from '../../services/firestore';
+import { ordersService, productsService, settingsService } from '../../services/firestore';
 import { ProductEditModal } from './ProductEditModal';
 import {
   Package,
@@ -136,11 +136,22 @@ export const AdminView: React.FC = () => {
     };
     loadData();
 
-    // Subscribe to real-time order updates
-    const unsubscribe = ordersService.subscribeToAllOrders((liveOrders) => {
+    // Subscribe to real-time updates (orders, products, settings)
+    const unsubscribeOrders = ordersService.subscribeToAllOrders((liveOrders) => {
       useStore.setState({ orders: liveOrders });
     });
-    return () => unsubscribe();
+    const unsubscribeProducts = productsService.subscribeToProducts((liveProducts) => {
+      useStore.getState().setProducts(liveProducts);
+    });
+    const unsubscribeSettings = settingsService.subscribeToGlobalSettings((liveSettings) => {
+      useStore.getState().setGlobalSettings(liveSettings);
+    });
+
+    return () => {
+      unsubscribeOrders();
+      unsubscribeProducts();
+      unsubscribeSettings();
+    };
   }, []);
 
   // Sync local state when global data loads

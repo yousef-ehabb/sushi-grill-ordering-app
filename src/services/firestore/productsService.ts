@@ -7,6 +7,8 @@ import {
   getDoc,
   setDoc,
   writeBatch,
+  onSnapshot,
+  type Unsubscribe,
 } from 'firebase/firestore';
 import { db, isFirebaseConfigured } from '../../lib/firebase';
 import {
@@ -45,6 +47,36 @@ export const productsService = {
       console.warn('[Firestore] Error fetching products, using fallback:', error);
       return INITIAL_PRODUCTS;
     }
+  },
+
+  /**
+   * Subscribe to real-time changes in products collection
+   */
+  subscribeToProducts(callback: (products: Product[]) => void): Unsubscribe {
+    if (!isFirebaseConfigured() || !db) {
+      callback(INITIAL_PRODUCTS);
+      return () => {};
+    }
+
+    const colRef = collection(db, PRODUCTS_COLLECTION);
+    return onSnapshot(
+      colRef,
+      (snapshot) => {
+        if (snapshot.empty) {
+          callback(INITIAL_PRODUCTS);
+          return;
+        }
+
+        const products = snapshot.docs.map((docSnap) => ({
+          id: docSnap.id,
+          ...(docSnap.data() as Omit<Product, 'id'>),
+        }));
+        callback(products);
+      },
+      (error) => {
+        console.warn('[Firestore] Error in products subscription:', error);
+      }
+    );
   },
 
   /**
