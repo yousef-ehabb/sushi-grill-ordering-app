@@ -212,8 +212,8 @@ const CustomerLayout: React.FC = () => {
             alt={restaurantConfig.brand.nameAr}
             className="w-full h-full object-cover object-center"
           />
-          {/* Deep crimson and dark tone blend */}
-          <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-red-950/75 to-black/80" />
+          {/* Natural cinematic vignette that keeps the photo clear and vibrant while preserving readability */}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/40 to-black/65" />
         </div>
 
         <div className="relative w-full max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col items-center justify-center text-center">
