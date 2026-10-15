@@ -15,19 +15,30 @@ interface ProductDetailsModalProps {
 
 const MAX_NOTE_LENGTH = 200;
 
-export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ product, isOpen, onClose }) => {
-    const { addToCartWithDetails, categories, globalSettings, fetchProductOptionGroups, optionGroupsByProductId } = useStore();
+export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ product: initialProduct, isOpen, onClose }) => {
+    const { addToCartWithDetails, categories, globalSettings, fetchProductOptionGroups, optionGroupsByProductId, products } = useStore();
     const [quantity, setQuantity] = useState(1);
     const [note, setNote] = useState('');
     const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
     const dragControls = useDragControls();
 
+    const product = products.find(p => p.id === initialProduct.id) || initialProduct;
     const category = categories.find(c => c.id === product.category_id);
     const isCategoryInactive = category && !category.is_active;
     const isWebsiteClosed = globalSettings && !globalSettings.is_website_open;
     const isDisabled = !product.is_available || !!isCategoryInactive || !!isWebsiteClosed;
 
     const groups = optionGroupsByProductId[product.id] || [];
+
+    // Real-time alert if item becomes unavailable while modal is open
+    useEffect(() => {
+        if (isOpen && !product.is_available) {
+            toast.error('صنف غير متاح حالياً', {
+                description: `عذراً، الصنف "${product.name_ar}" أصبح غير متاح حالياً.`,
+                duration: 6000,
+            });
+        }
+    }, [isOpen, product.is_available, product.name_ar]);
 
     // Background Body Scroll Lock
     useEffect(() => {

@@ -13,6 +13,8 @@ interface CartSidebarProps {
 export const CartSidebar: React.FC<CartSidebarProps> = ({ isOpen, onClose, onCheckout }) => {
   const {
     cart,
+    products,
+    globalSettings,
     updateQuantity,
     removeFromCart,
     orderType,
@@ -76,6 +78,14 @@ export const CartSidebar: React.FC<CartSidebarProps> = ({ isOpen, onClose, onChe
 
   const warnings = getMinQtyWarnings();
   const hasViolations = warnings.length > 0;
+
+  const unavailableCartItems = cart.filter(item => {
+    const p = products.find(prod => prod.id === item.id);
+    return (p && !p.is_available) || !item.is_available;
+  });
+  const hasUnavailableItems = unavailableCartItems.length > 0;
+  const isWebsiteClosed = globalSettings && !globalSettings.is_website_open;
+  const isCheckoutDisabled = hasViolations || hasUnavailableItems || !!isWebsiteClosed;
 
   return (
     <>
@@ -229,6 +239,22 @@ export const CartSidebar: React.FC<CartSidebarProps> = ({ isOpen, onClose, onChe
 
         {cart.length > 0 && (
           <div className="p-4 border-t bg-slate-50 space-y-4">
+            {/* Unavailable Items Warning */}
+            {hasUnavailableItems && (
+              <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-xl text-red-800 text-xs sm:text-sm font-medium">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-red-500" />
+                <span>عذراً، يوجد أصناف غير متاحة حالياً ({unavailableCartItems.map(i => i.name_ar).join('، ')}). يرجى إزالتها لمتابعة الطلب.</span>
+              </div>
+            )}
+
+            {/* Closed Website Warning */}
+            {isWebsiteClosed && (
+              <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-xl text-red-800 text-xs sm:text-sm font-medium">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-red-500" />
+                <span>المطعم مغلق حالياً ولا يستقبل طلبات جديدة.</span>
+              </div>
+            )}
+
             {/* Minimum Quantity Warnings */}
             {hasViolations && (
               <div className="space-y-2">
@@ -258,9 +284,9 @@ export const CartSidebar: React.FC<CartSidebarProps> = ({ isOpen, onClose, onChe
             </div>
             <button
               onClick={onCheckout}
-              disabled={hasViolations}
+              disabled={isCheckoutDisabled}
               className={`w-full py-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 shadow-lg
-                ${hasViolations
+                ${isCheckoutDisabled
                   ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
                   : 'bg-primary text-white hover:bg-red-700 shadow-red-100'
                 }`}

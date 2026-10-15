@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { X, CheckCircle2, Truck, Store, MapPin, Phone, User, Loader2, ArrowLeft, UserCheck } from 'lucide-react';
+import { X, CheckCircle2, Truck, Store, MapPin, Phone, User, Loader2, ArrowLeft, UserCheck, AlertTriangle } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
+import { clsx } from 'clsx';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -11,7 +12,7 @@ interface CheckoutModalProps {
 }
 
 export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose }) => {
-  const { cart, orderType, setOrderType, clearCart, submitOrder, loading } = useStore();
+  const { cart, products, globalSettings, orderType, setOrderType, clearCart, submitOrder, loading } = useStore();
   const { user, isAuthenticated } = useAuthStore();
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState({
@@ -19,6 +20,21 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
     phone: '',
     address: '',
   });
+
+  const isWebsiteClosed = globalSettings && !globalSettings.is_website_open;
+  const unavailableCartItems = cart.filter(item => {
+    const p = products.find(prod => prod.id === item.id);
+    return (p && !p.is_available) || !item.is_available;
+  });
+  const hasUnavailableItems = unavailableCartItems.length > 0;
+  const isSubmitDisabled = loading || !orderType || !!isWebsiteClosed || hasUnavailableItems || cart.length === 0;
+
+  // Auto-close if cart becomes empty in real-time (e.g. item removed)
+  useEffect(() => {
+    if (isOpen && cart.length === 0 && step === 1) {
+      onClose();
+    }
+  }, [isOpen, cart.length, step, onClose]);
 
   // Auto-fill from user profile when modal opens
   useEffect(() => {
@@ -46,6 +62,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitDisabled) return;
 
     const orderId = await submitOrder({
       customer_name: formData.name,
@@ -68,8 +85,12 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
       const errorMessage = useStore.getState().error;
       toast.error('لم يتم إرسال الطلب', {
         description: errorMessage || 'يرجى المحاولة مرة أخرى.',
-        duration: 5000,
+        duration: 6000,
       });
+      // If cart became empty because unavailable items were removed, close checkout modal
+      if (useStore.getState().cart.length === 0) {
+        onClose();
+      }
     }
   };
 
@@ -230,6 +251,21 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
                   className="p-4 sm:p-5 md:p-6 bg-white border-t border-slate-100 shrink-0 shadow-[0_-4px_12px_rgba(0,0,0,0.05)] z-20"
                   style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 1rem))' }}
                 >
+                  {/* Live Warnings */}
+                  {hasUnavailableItems && (
+                    <div className="mb-3 p-2.5 bg-red-50 border border-red-200 rounded-xl text-red-800 text-xs font-medium flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
+                      <span>عذراً، يوجد أصناف غير متاحة حالياً ({unavailableCartItems.map(i => i.name_ar).join('، ')}).</span>
+                    </div>
+                  )}
+
+                  {isWebsiteClosed && (
+                    <div className="mb-3 p-2.5 bg-red-50 border border-red-200 rounded-xl text-red-800 text-xs font-medium flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
+                      <span>المطعم مغلق حالياً ولا يستقبل طلبات جديدة.</span>
+                    </div>
+                  )}
+
                   <div className="flex justify-between items-center mb-3 sm:mb-4 text-xs sm:text-sm">
                     <span className="text-slate-500 font-medium">الإجمالي المطلوب</span>
                     <span className="text-xl sm:text-2xl font-black text-slate-900">
@@ -239,13 +275,18 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
                   <button
                     form="checkout-form"
                     type="submit"
-                    disabled={!orderType || loading}
-                    className="w-full bg-primary text-white py-3.5 sm:py-4 rounded-xl font-bold text-base sm:text-lg hover:bg-red-700 transition-all active:scale-[0.98] disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed shadow-xl shadow-red-500/20 disabled:shadow-none flex items-center justify-center gap-2 cursor-pointer"
+                    disabled={isSubmitDisabled}
+                    className={clsx(
+                      "w-full py-3.5 sm:py-4 rounded-xl font-bold text-base sm:text-lg transition-all active:scale-[0.98] flex items-center justify-center gap-2",
+                      isSubmitDisabled
+                        ? "bg-slate-200 text-slate-400 cursor-not-allowed shadow-none"
+                        : "bg-primary text-white hover:bg-red-700 shadow-xl shadow-red-500/20 cursor-pointer"
+                    )}
                   >
                     {loading ? (
                       <>
                         <Loader2 className="w-5 h-5 animate-spin" />
-                        <span>جاري الإرسال...</span>
+                        <span>جاري التحقق والإرسال...</span>
                       </>
                     ) : (
                       <>
