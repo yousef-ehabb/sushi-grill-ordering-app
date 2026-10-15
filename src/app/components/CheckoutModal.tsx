@@ -91,41 +91,47 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
             initial={{ opacity: 0, scale: 0.95, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
-            className="bg-white w-full max-w-lg rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-2xl relative z-10 max-h-[90vh] flex flex-col"
+            className="bg-white w-full max-w-lg rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-2xl relative z-10 max-h-[85vh] max-h-[85dvh] sm:max-h-[90vh] sm:max-h-[90dvh] flex flex-col"
           >
             {step === 1 ? (
-              <div className="flex flex-col h-full bg-slate-50">
-                {/* Header */}
-                <div className="bg-white p-6 border-b flex items-center justify-between sticky top-0 z-10">
-                  <h2 className="text-xl font-bold text-slate-900">إتمام الطلب</h2>
+              <div className="flex flex-col flex-1 min-h-0 bg-slate-50 overflow-hidden">
+                {/* Header - Fixed & Compact */}
+                <div className="bg-white px-5 py-3.5 sm:px-6 sm:py-4 border-b border-slate-100 flex items-center justify-between shrink-0 z-10">
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-lg sm:text-xl font-bold text-slate-900">إتمام الطلب</h2>
+                    <span className="text-xs bg-red-50 text-primary font-bold px-2.5 py-0.5 rounded-full border border-red-100">
+                      {cart.reduce((sum, item) => sum + item.quantity, 0)} أصناف
+                    </span>
+                  </div>
                   <button
                     onClick={onClose}
-                    className="p-2 -mr-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors"
+                    className="p-1.5 -mr-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors cursor-pointer"
+                    aria-label="إغلاق"
                   >
-                    <X className="w-6 h-6" />
+                    <X className="w-5 h-5 sm:w-6 sm:h-6" />
                   </button>
                 </div>
 
-                {/* Body */}
-                <div className="flex-grow overflow-y-auto p-6 md:p-8">
-                  <form id="checkout-form" onSubmit={handleSubmit} className="space-y-6">
+                {/* Body - Independently Scrollable */}
+                <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 sm:p-6 md:p-8 scrollbar-thin">
+                  <form id="checkout-form" onSubmit={handleSubmit} className="space-y-4 sm:space-y-5">
                     {/* Order Type Selection */}
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-2 gap-3 sm:gap-4">
                       <button
                         type="button"
                         onClick={() => setOrderType('pickup')}
-                        className={`relative overflow-hidden p-4 rounded-2xl flex flex-col items-center gap-3 transition-all duration-300 ${orderType === 'pickup'
-                          ? 'bg-white ring-2 ring-primary shadow-lg shadow-red-100'
+                        className={`relative overflow-hidden p-3 sm:p-4 rounded-xl sm:rounded-2xl flex flex-col items-center gap-2 sm:gap-3 transition-all duration-200 cursor-pointer ${orderType === 'pickup'
+                          ? 'bg-white ring-2 ring-primary shadow-md shadow-red-100'
                           : 'bg-white border border-slate-200 text-slate-400 hover:border-slate-300 hover:bg-slate-50'
                           }`}
                       >
-                        <div className={`p-3 rounded-full ${orderType === 'pickup' ? 'bg-red-50 text-primary' : 'bg-slate-100 text-slate-400'}`}>
-                          <Store className="w-6 h-6" />
+                        <div className={`p-2.5 sm:p-3 rounded-full ${orderType === 'pickup' ? 'bg-red-50 text-primary' : 'bg-slate-100 text-slate-400'}`}>
+                          <Store className="w-5 h-5 sm:w-6 sm:h-6" />
                         </div>
-                        <span className={`font-bold ${orderType === 'pickup' ? 'text-primary' : 'text-slate-600'}`}>استلام من المطعم</span>
+                        <span className={`font-bold text-xs sm:text-sm ${orderType === 'pickup' ? 'text-primary' : 'text-slate-600'}`}>استلام من المطعم</span>
                         {orderType === 'pickup' && (
-                          <motion.div layoutId="check" className="absolute top-3 right-3 text-primary">
-                            <CheckCircle2 className="w-5 h-5 fill-red-50" />
+                          <motion.div layoutId="check" className="absolute top-2.5 right-2.5 text-primary">
+                            <CheckCircle2 className="w-4 h-4 sm:w-5 sm:h-5 fill-red-50" />
                           </motion.div>
                         )}
                       </button>
@@ -133,18 +139,18 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
                       <button
                         type="button"
                         onClick={() => setOrderType('delivery')}
-                        className={`relative overflow-hidden p-4 rounded-2xl flex flex-col items-center gap-3 transition-all duration-300 ${orderType === 'delivery'
-                          ? 'bg-white ring-2 ring-primary shadow-lg shadow-red-100'
+                        className={`relative overflow-hidden p-3 sm:p-4 rounded-xl sm:rounded-2xl flex flex-col items-center gap-2 sm:gap-3 transition-all duration-200 cursor-pointer ${orderType === 'delivery'
+                          ? 'bg-white ring-2 ring-primary shadow-md shadow-red-100'
                           : 'bg-white border border-slate-200 text-slate-400 hover:border-slate-300 hover:bg-slate-50'
                           }`}
                       >
-                        <div className={`p-3 rounded-full ${orderType === 'delivery' ? 'bg-red-50 text-primary' : 'bg-slate-100 text-slate-400'}`}>
-                          <Truck className="w-6 h-6" />
+                        <div className={`p-2.5 sm:p-3 rounded-full ${orderType === 'delivery' ? 'bg-red-50 text-primary' : 'bg-slate-100 text-slate-400'}`}>
+                          <Truck className="w-5 h-5 sm:w-6 sm:h-6" />
                         </div>
-                        <span className={`font-bold ${orderType === 'delivery' ? 'text-primary' : 'text-slate-600'}`}>توصيل للمنزل</span>
+                        <span className={`font-bold text-xs sm:text-sm ${orderType === 'delivery' ? 'text-primary' : 'text-slate-600'}`}>توصيل للمنزل</span>
                         {orderType === 'delivery' && (
-                          <motion.div layoutId="check" className="absolute top-3 right-3 text-primary">
-                            <CheckCircle2 className="w-5 h-5 fill-red-50" />
+                          <motion.div layoutId="check" className="absolute top-2.5 right-2.5 text-primary">
+                            <CheckCircle2 className="w-4 h-4 sm:w-5 sm:h-5 fill-red-50" />
                           </motion.div>
                         )}
                       </button>
@@ -152,39 +158,40 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
 
                     {/* Customer Details */}
                     {isAuthenticated && user && (
-                      <div className="flex items-center gap-2 px-3 py-2.5 bg-emerald-50 rounded-xl border border-emerald-100">
+                      <div className="flex items-center gap-2 px-3 py-2 bg-emerald-50 rounded-xl border border-emerald-100">
                         <UserCheck className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                        <span className="text-sm font-medium text-emerald-700">
+                        <span className="text-xs sm:text-sm font-medium text-emerald-700">
                           مسجّل كـ <span className="font-bold">{user.name}</span> — تم ملء بياناتك تلقائياً
                         </span>
                       </div>
                     )}
-                    <div className="space-y-4">
-                      <div className="space-y-1.5">
-                        <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                          <User className="w-4 h-4 text-slate-400" />
+
+                    <div className="space-y-3 sm:space-y-4">
+                      <div className="space-y-1">
+                        <label className="text-xs sm:text-sm font-bold text-slate-700 flex items-center gap-1.5">
+                          <User className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-400" />
                           الاسم الكامل
                         </label>
                         <input
                           required
                           type="text"
                           placeholder="الاسم ثلاثي"
-                          className="w-full px-4 py-3.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all placeholder:text-slate-300 font-medium"
+                          className="w-full px-3.5 py-3 sm:px-4 sm:py-3.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all placeholder:text-slate-300 font-medium text-sm"
                           value={formData.name}
                           onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                         />
                       </div>
 
-                      <div className="space-y-1.5">
-                        <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                          <Phone className="w-4 h-4 text-slate-400" />
+                      <div className="space-y-1">
+                        <label className="text-xs sm:text-sm font-bold text-slate-700 flex items-center gap-1.5">
+                          <Phone className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-400" />
                           رقم الهاتف
                         </label>
                         <input
                           required
                           type="tel"
                           placeholder="01xxxxxxxxx"
-                          className="w-full px-4 py-3.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all placeholder:text-slate-300 font-medium text-left"
+                          className="w-full px-3.5 py-3 sm:px-4 sm:py-3.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all placeholder:text-slate-300 font-medium text-sm text-left"
                           dir="ltr"
                           value={formData.phone}
                           onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
@@ -197,17 +204,17 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
                             initial={{ opacity: 0, height: 0 }}
                             animate={{ opacity: 1, height: 'auto' }}
                             exit={{ opacity: 0, height: 0 }}
-                            className="space-y-1.5 overflow-hidden"
+                            className="space-y-1 overflow-hidden"
                           >
-                            <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                              <MapPin className="w-4 h-4 text-slate-400" />
+                            <label className="text-xs sm:text-sm font-bold text-slate-700 flex items-center gap-1.5">
+                              <MapPin className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-400" />
                               العنوان بالتفصيل
                             </label>
                             <textarea
                               required
-                              rows={3}
+                              rows={2}
                               placeholder="المنطقة، الشارع، رقم العمارة، الشقة..."
-                              className="w-full px-4 py-3.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all placeholder:text-slate-300 font-medium resize-none"
+                              className="w-full px-3.5 py-3 sm:px-4 sm:py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all placeholder:text-slate-300 font-medium text-sm resize-none"
                               value={formData.address}
                               onChange={(e) => setFormData({ ...formData, address: e.target.value })}
                             />
@@ -218,22 +225,27 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
                   </form>
                 </div>
 
-                {/* Footer */}
-                <div className="p-6 bg-white border-t mt-auto shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
-                  <div className="flex justify-between items-center mb-4 text-sm">
+                {/* Footer - Pinned with Safe Area Support */}
+                <div
+                  className="p-4 sm:p-5 md:p-6 bg-white border-t border-slate-100 shrink-0 shadow-[0_-4px_12px_rgba(0,0,0,0.05)] z-20"
+                  style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 1rem))' }}
+                >
+                  <div className="flex justify-between items-center mb-3 sm:mb-4 text-xs sm:text-sm">
                     <span className="text-slate-500 font-medium">الإجمالي المطلوب</span>
-                    <span className="text-2xl font-black text-slate-900">{total} <span className="text-base font-bold text-slate-400">ج.م</span></span>
+                    <span className="text-xl sm:text-2xl font-black text-slate-900">
+                      {total} <span className="text-xs sm:text-base font-bold text-slate-400">ج.م</span>
+                    </span>
                   </div>
                   <button
                     form="checkout-form"
                     type="submit"
                     disabled={!orderType || loading}
-                    className="w-full bg-primary text-white py-4 rounded-xl font-bold text-lg hover:bg-red-700 transition-all active:scale-[0.98] disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed shadow-xl shadow-red-500/20 disabled:shadow-none flex items-center justify-center gap-2"
+                    className="w-full bg-primary text-white py-3.5 sm:py-4 rounded-xl font-bold text-base sm:text-lg hover:bg-red-700 transition-all active:scale-[0.98] disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed shadow-xl shadow-red-500/20 disabled:shadow-none flex items-center justify-center gap-2 cursor-pointer"
                   >
                     {loading ? (
                       <>
                         <Loader2 className="w-5 h-5 animate-spin" />
-                        جاري الإرسال...
+                        <span>جاري الإرسال...</span>
                       </>
                     ) : (
                       <>
@@ -242,24 +254,27 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
                       </>
                     )}
                   </button>
-                  <p className="text-center text-xs text-slate-400 mt-3 font-medium">
+                  <p className="text-center text-[11px] sm:text-xs text-slate-400 mt-2 sm:mt-2.5 font-medium">
                     الدفع عند الاستلام (كاش)
                   </p>
                 </div>
               </div>
             ) : (
               // Success State
-              <div className="p-12 text-center flex flex-col items-center justify-center h-full min-h-[400px]">
-                <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mb-6 shadow-inner ring-8 ring-green-50">
-                  <CheckCircle2 className="w-12 h-12 text-green-600" />
+              <div
+                className="p-8 sm:p-12 text-center flex flex-col items-center justify-center flex-1 min-h-0 overflow-y-auto"
+                style={{ paddingBottom: 'max(2rem, env(safe-area-inset-bottom, 2rem))' }}
+              >
+                <div className="w-20 h-20 sm:w-24 sm:h-24 bg-green-100 rounded-full flex items-center justify-center mb-5 sm:mb-6 shadow-inner ring-8 ring-green-50">
+                  <CheckCircle2 className="w-10 h-10 sm:w-12 sm:h-12 text-green-600" />
                 </div>
-                <h2 className="text-3xl font-black text-slate-900 mb-2">تم بنجاح!</h2>
-                <p className="text-slate-500 mb-8 max-w-[280px] leading-relaxed">
+                <h2 className="text-2xl sm:text-3xl font-black text-slate-900 mb-2">تم بنجاح!</h2>
+                <p className="text-slate-500 mb-6 sm:mb-8 max-w-[280px] leading-relaxed text-sm sm:text-base">
                   شكراً لطلبك. سنتواصل معك لتأكيد الطلب قريباً.
                 </p>
                 <button
                   onClick={onClose}
-                  className="w-full bg-slate-900 text-white py-4 rounded-xl font-bold hover:bg-slate-800 transition-all shadow-lg active:scale-95"
+                  className="w-full bg-slate-900 text-white py-3.5 sm:py-4 rounded-xl font-bold hover:bg-slate-800 transition-all shadow-lg active:scale-95 cursor-pointer text-sm sm:text-base"
                 >
                   العودة للقائمة
                 </button>

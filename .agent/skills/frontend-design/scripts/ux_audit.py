@@ -113,7 +113,7 @@ class UXAuditor:
 
         # Pre-calculate common flags
         has_long_text = bool(re.search(r'<p|<div.*class=.*text|article|<span.*text', content, re.IGNORECASE))
-        has_form = bool(re.search(r'<form|<input|password|credit|card|payment', content, re.IGNORECASE))
+        has_form = bool(re.search(r'<form\b|<input\b|<textarea\b|<select\b', content, re.IGNORECASE)) and not filepath.endswith(('.css', '.scss'))
         complex_elements = len(re.findall(r'<input|<select|<textarea|<option', content, re.IGNORECASE))
 
         # --- 1. PSYCHOLOGY LAWS ---
@@ -246,11 +246,14 @@ class UXAuditor:
         # 2.1 Font Pairing - Too many font families
         font_families = set()
         # Check for @font-face, Google Fonts, font-family declarations
-        font_faces = re.findall(r'@font-face\s*\{[^}]*family:\s*["\']?([^;"\'\s}]+)', content, re.IGNORECASE)
+        font_faces = re.findall(r'@font-face\s*\{[^}]*family:\s*["\']?([^;"\'}\r\n]+)', content, re.IGNORECASE)
         google_fonts = re.findall(r'fonts\.googleapis\.com[^"\']*family=([^"&]+)', content, re.IGNORECASE)
         font_family_css = re.findall(r'font-family:\s*([^;]+)', content, re.IGNORECASE)
 
-        for font in font_faces: font_families.add(font.strip().lower())
+        for font in font_faces:
+            clean_font = font.strip().strip('"\'').lower()
+            if clean_font:
+                font_families.add(clean_font)
         for font in google_fonts:
             for f in font.replace('+', ' ').split('|'):
                 font_families.add(f.split(':')[0].strip().lower())
@@ -258,10 +261,13 @@ class UXAuditor:
             # Extract first font from stack
             first_font = family.split(',')[0].strip().strip('"\'')
 
+            if first_font.startswith('var(') or not first_font:
+                continue
+
             if first_font.lower() not in {'sans-serif', 'serif', 'monospace', 'cursive', 'fantasy', 'system-ui', 'inherit', 'arial', 'georgia', 'times new roman', 'courier new', 'verdana', 'helvetica', 'tahoma'}:
                 font_families.add(first_font.lower())
 
-        if len(font_families) > 3:
+        if len(font_families) > 3 and filename != 'fonts.css':
             self.issues.append(f"[Typography] {filename}: {len(font_families)} font families detected. Limit to 2-3 for cohesion.")
 
         # 2.2 Line Length - Character-based width

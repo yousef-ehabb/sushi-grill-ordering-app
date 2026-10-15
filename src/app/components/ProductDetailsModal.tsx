@@ -5,6 +5,7 @@ import { motion, AnimatePresence, useDragControls } from 'motion/react';
 import { toast } from 'sonner';
 import { OptionGroupSelector } from './OptionGroupSelector';
 import { computeOptionsPrice } from '../utils/price';
+import { clsx } from 'clsx';
 
 interface ProductDetailsModalProps {
     product: Product;
@@ -251,48 +252,56 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ produc
                         </div>
 
                         {/* Sticky Action Bar */}
-                        {!isDisabled && (
-                            <div className="sticky bottom-0 bg-white/95 backdrop-blur border-t border-zinc-100 p-4 flex items-center gap-3 z-30">
-                                {/* Ergonomic Quantity Counter */}
-                                <div className="flex items-center bg-zinc-100 rounded-2xl p-1 border border-zinc-200/80 shrink-0">
-                                    <button
-                                        type="button"
-                                        onClick={() => setQuantity(q => Math.max(1, q - 1))}
-                                        disabled={quantity <= 1}
-                                        className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-white shadow-xs text-zinc-700 hover:text-zinc-950 flex items-center justify-center transition-all active:scale-90 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                                        aria-label="تقليل الكمية"
-                                    >
-                                        <Minus className="w-4 h-4 stroke-[2.5]" />
-                                    </button>
-                                    <span className="w-8 sm:w-10 text-center font-black text-base sm:text-lg text-zinc-900 select-none">
-                                        {quantity}
-                                    </span>
-                                    <button
-                                        type="button"
-                                        onClick={() => setQuantity(q => q + 1)}
-                                        className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-white shadow-xs text-zinc-700 hover:text-zinc-950 flex items-center justify-center transition-all active:scale-90 cursor-pointer"
-                                        aria-label="زيادة الكمية"
-                                    >
-                                        <Plus className="w-4 h-4 stroke-[2.5]" />
-                                    </button>
-                                </div>
-
-                                {/* Wide Primary Button in #DC2626 ("أضف للسلة - Total Price") */}
+                        <div className="sticky bottom-0 bg-white/95 backdrop-blur border-t border-zinc-100 p-4 flex items-center gap-3 z-30">
+                            {/* Ergonomic Quantity Counter */}
+                            <div className="flex items-center bg-zinc-100 rounded-2xl p-1 border border-zinc-200/80 shrink-0">
                                 <button
                                     type="button"
-                                    onClick={handleAdd}
-                                    className="flex-1 h-12 bg-[#DC2626] hover:bg-red-700 active:bg-red-800 text-white rounded-2xl font-black text-xs sm:text-sm flex items-center justify-between px-4 sm:px-5 shadow-lg shadow-red-600/25 transition-all active:scale-[0.98] cursor-pointer"
+                                    onClick={() => setQuantity(q => Math.max(1, q - 1))}
+                                    disabled={quantity <= 1 || isDisabled}
+                                    className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-white shadow-xs text-zinc-700 hover:text-zinc-950 flex items-center justify-center transition-all active:scale-90 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                                    aria-label="تقليل الكمية"
                                 >
-                                    <div className="flex items-center gap-2">
-                                        <ShoppingBag className="w-4.5 h-4.5 sm:w-5 sm:h-5 stroke-[2.2]" />
-                                        <span>أضف للسلة</span>
-                                    </div>
-                                    <span className="bg-white/20 backdrop-blur-xs px-2.5 sm:px-3 py-1 rounded-xl text-xs sm:text-sm font-black tracking-tight">
-                                        {totalPrice} ج.م
-                                    </span>
+                                    <Minus className="w-4 h-4 stroke-[2.5]" />
+                                </button>
+                                <span className="w-8 sm:w-10 text-center font-black text-base sm:text-lg text-zinc-900 select-none">
+                                    {quantity}
+                                </span>
+                                <button
+                                    type="button"
+                                    onClick={() => setQuantity(q => q + 1)}
+                                    disabled={isDisabled}
+                                    className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-white shadow-xs text-zinc-700 hover:text-zinc-950 flex items-center justify-center transition-all active:scale-90 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                                    aria-label="زيادة الكمية"
+                                >
+                                    <Plus className="w-4 h-4 stroke-[2.5]" />
                                 </button>
                             </div>
-                        )}
+
+                            {/* Wide Primary Button */}
+                            <button
+                                type="button"
+                                onClick={handleAdd}
+                                disabled={isDisabled}
+                                className={clsx(
+                                    "flex-1 h-12 rounded-2xl font-black text-xs sm:text-sm flex items-center justify-between px-4 sm:px-5 transition-all",
+                                    !isDisabled
+                                        ? "bg-[#DC2626] hover:bg-red-700 active:bg-red-800 text-white shadow-lg shadow-red-600/25 active:scale-[0.98] cursor-pointer"
+                                        : "bg-slate-200 text-slate-500 cursor-not-allowed shadow-none"
+                                )}
+                            >
+                                <div className="flex items-center gap-2">
+                                    <ShoppingBag className="w-4.5 h-4.5 sm:w-5 sm:h-5 stroke-[2.2]" />
+                                    <span>{!product.is_available ? 'غير متاح حالياً' : 'أضف للسلة'}</span>
+                                </div>
+                                <span className={clsx(
+                                    "px-2.5 sm:px-3 py-1 rounded-xl text-xs sm:text-sm font-black tracking-tight",
+                                    !isDisabled ? "bg-white/20 backdrop-blur-xs" : "bg-slate-300/60 text-slate-600"
+                                )}>
+                                    {totalPrice} ج.م
+                                </span>
+                            </button>
+                        </div>
                     </motion.div>
                 </div>
             )}
