@@ -6,6 +6,7 @@ import { db, isFirebaseConfigured } from '../../lib/firebase';
 import { getStorage } from 'firebase/storage';
 import { toast } from 'sonner';
 import { broadcastSyncEvent } from '../utils/realtimeSync';
+import { computeOptionsPrice } from '../utils/price';
 import {
   categoriesService,
   productsService,
@@ -215,13 +216,20 @@ export const useStore = create<AppState>()(
       // ── Real-Time Sync Setters ──────────────────────────────
 
       setProducts: (products: Product[]) => {
+        if (!products || products.length === 0) return;
+
         const currentCart = get().cart;
+        if (currentCart.length === 0) {
+          set({ products });
+          return;
+        }
+
         const unavailableInCart: CartItem[] = [];
         const validCart: CartItem[] = [];
 
         for (const item of currentCart) {
           const matched = products.find((p) => p.id === item.id);
-          if (matched && !matched.is_available) {
+          if (matched && matched.is_available === false) {
             unavailableInCart.push(item);
           } else {
             validCart.push(item);
@@ -366,12 +374,12 @@ export const useStore = create<AppState>()(
       addToCart: (product) =>
         set((state) => {
           // Guard: website closed
-          if (state.globalSettings && !state.globalSettings.is_website_open) return state;
+          if (state.globalSettings && state.globalSettings.is_website_open === false) return state;
           // Guard: category inactive
           const category = state.categories.find(c => c.id === product.category_id);
-          if (category && !category.is_active) return state;
+          if (category && category.is_active === false) return state;
           // Guard: product unavailable
-          if (!product.is_available) return state;
+          if (product.is_available === false) return state;
 
           const cartKey = product.id;
           const existing = state.cart.find((item) => item.cartKey === cartKey);
@@ -390,12 +398,12 @@ export const useStore = create<AppState>()(
       addToCartWithDetails: (product, quantity, specialInstructions, selectedOptionIds) =>
         set((state) => {
           // Guard: website closed
-          if (state.globalSettings && !state.globalSettings.is_website_open) return state;
+          if (state.globalSettings && state.globalSettings.is_website_open === false) return state;
           // Guard: category inactive
           const category = state.categories.find(c => c.id === product.category_id);
-          if (category && !category.is_active) return state;
+          if (category && category.is_active === false) return state;
           // Guard: product unavailable
-          if (!product.is_available) return state;
+          if (product.is_available === false) return state;
 
           const trimmedNote = specialInstructions?.trim().slice(0, 200) || undefined;
           const sortedOptions = selectedOptionIds?.slice().sort() || [];
