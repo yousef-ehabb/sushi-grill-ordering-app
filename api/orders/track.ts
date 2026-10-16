@@ -3,46 +3,45 @@ import { normalizePhoneEgyptian } from '../../src/server/orderEngine';
 import { getClientIp, checkRateLimit, applyRateLimitHeaders } from '../../src/server/rateLimiter';
 
 export default async function handler(req: any, res: any) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-  if (req.method === 'OPTIONS') {
-    return res.status(204).end();
-  }
-
-  if (req.method !== 'GET') {
-    return res.status(405).json({ success: false, error: 'Method not allowed' });
-  }
-
-  // Rate Limiting Protection (30 track queries per 5 minutes per IP)
-  const clientIp = getClientIp(req);
-  const rateLimitResult = await checkRateLimit(clientIp, {
-    prefix: 'order_track',
-    maxRequests: 30,
-    windowSeconds: 300,
-  });
-  applyRateLimitHeaders(res, rateLimitResult);
-
-  if (!rateLimitResult.allowed) {
-    return res.status(429).json({
-      success: false,
-      error: 'لقد تجاوزت عدد محاولات الاستعلام المسموح بها، يرجى الانتظار قليلاً والمحاولة لاحقاً.',
-      code: 'RATE_LIMIT_EXCEEDED',
-    });
-  }
-
-  const { orderId, phone } = req.query;
-
-  if (!orderId || typeof orderId !== 'string' || !phone || typeof phone !== 'string') {
-    return res.status(400).json({
-      success: false,
-      error: 'يرجى تقديم رقم الطلب ورقم الهاتف للمتابعة',
-      code: 'MISSING_PARAMS',
-    });
-  }
-
   try {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    if (req.method === 'OPTIONS') {
+      return res.status(204).end();
+    }
+
+    if (req.method !== 'GET') {
+      return res.status(405).json({ success: false, error: 'Method not allowed' });
+    }
+
+    // Rate Limiting Protection (30 track queries per 5 minutes per IP)
+    const clientIp = getClientIp(req);
+    const rateLimitResult = await checkRateLimit(clientIp, {
+      prefix: 'order_track',
+      maxRequests: 30,
+      windowSeconds: 300,
+    });
+    applyRateLimitHeaders(res, rateLimitResult);
+
+    if (!rateLimitResult.allowed) {
+      return res.status(429).json({
+        success: false,
+        error: 'لقد تجاوزت عدد محاولات الاستعلام المسموح بها، يرجى الانتظار قليلاً والمحاولة لاحقاً.',
+        code: 'RATE_LIMIT_EXCEEDED',
+      });
+    }
+
+    const { orderId, phone } = req.query;
+
+    if (!orderId || typeof orderId !== 'string' || !phone || typeof phone !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'يرجى تقديم رقم الطلب ورقم الهاتف للمتابعة',
+        code: 'MISSING_PARAMS',
+      });
+    }
     if (!isFirebaseAdminConfigured()) {
       console.error('[API/orders/track] Firebase Admin credentials not configured in environment variables');
       return res.status(500).json({

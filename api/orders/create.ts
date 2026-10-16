@@ -3,37 +3,36 @@ import { processOrderCreation } from '../../src/server/orderEngine';
 import { getClientIp, checkRateLimit, applyRateLimitHeaders } from '../../src/server/rateLimiter';
 
 export default async function handler(req: any, res: any) {
-  // 1. CORS & Preflight handling
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-  if (req.method === 'OPTIONS') {
-    return res.status(204).end();
-  }
-
-  if (req.method !== 'POST') {
-    return res.status(405).json({ success: false, error: 'Method not allowed' });
-  }
-
-  // 2. Rate Limiting Protection (10 orders per 10 minutes per IP)
-  const clientIp = getClientIp(req);
-  const rateLimitResult = await checkRateLimit(clientIp, {
-    prefix: 'order_create',
-    maxRequests: 10,
-    windowSeconds: 600,
-  });
-  applyRateLimitHeaders(res, rateLimitResult);
-
-  if (!rateLimitResult.allowed) {
-    return res.status(429).json({
-      success: false,
-      error: 'لقد تجاوزت الحد المسموح به من الطلبات مؤقتاً، يرجى الانتظار والمحاولة لاحقاً.',
-      code: 'RATE_LIMIT_EXCEEDED',
-    });
-  }
-
   try {
+    // 1. CORS & Preflight handling
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    if (req.method === 'OPTIONS') {
+      return res.status(204).end();
+    }
+
+    if (req.method !== 'POST') {
+      return res.status(405).json({ success: false, error: 'Method not allowed' });
+    }
+
+    // 2. Rate Limiting Protection (10 orders per 10 minutes per IP)
+    const clientIp = getClientIp(req);
+    const rateLimitResult = await checkRateLimit(clientIp, {
+      prefix: 'order_create',
+      maxRequests: 10,
+      windowSeconds: 600,
+    });
+    applyRateLimitHeaders(res, rateLimitResult);
+
+    if (!rateLimitResult.allowed) {
+      return res.status(429).json({
+        success: false,
+        error: 'لقد تجاوزت الحد المسموح به من الطلبات مؤقتاً، يرجى الانتظار والمحاولة لاحقاً.',
+        code: 'RATE_LIMIT_EXCEEDED',
+      });
+    }
     if (!isFirebaseAdminConfigured()) {
       console.error('[API/create-order] Firebase Admin credentials not configured in environment variables');
       return res.status(500).json({
