@@ -21,7 +21,8 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    const db = firebase.firestore(app);
+    const { getFirestore } = await import('firebase-admin/firestore');
+    const db = getFirestore(app);
     const collections = await db.listCollections();
     const collectionIds = collections.map((c: any) => c.id);
 
