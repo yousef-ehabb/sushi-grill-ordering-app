@@ -1,6 +1,7 @@
-import { initializeApp, getApps, cert, type App } from 'firebase-admin/app';
+import admin from 'firebase-admin';
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 import { getAuth, type Auth } from 'firebase-admin/auth';
+import type { App } from 'firebase-admin/app';
 
 let appInstance: App | null = null;
 
@@ -15,17 +16,20 @@ export function getFirebaseAdmin(): {
   adminDb: Firestore;
   adminAuth: Auth;
 } {
+  const firebase = (admin as any).default || admin;
+
   if (!appInstance) {
-    const existingApps = getApps();
-    if (existingApps.length > 0 && existingApps[0]) {
+    const existingApps = firebase.apps;
+    if (existingApps && existingApps.length > 0 && existingApps[0]) {
       appInstance = existingApps[0];
     } else {
+      const certFn = firebase.cert || (firebase.credential && firebase.credential.cert);
       const serviceAccountKey = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
       if (serviceAccountKey) {
         try {
           const parsed = JSON.parse(serviceAccountKey);
-          appInstance = initializeApp({
-            credential: cert(parsed),
+          appInstance = firebase.initializeApp({
+            credential: certFn ? certFn(parsed) : undefined,
             projectId: parsed.project_id || process.env.VITE_FIREBASE_PROJECT_ID || 'pochinki-burger',
           });
         } catch (err) {
@@ -36,12 +40,14 @@ export function getFirebaseAdmin(): {
       if (!appInstance && process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
         try {
           const privateKey = process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n');
-          appInstance = initializeApp({
-            credential: cert({
-              projectId: process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || 'pochinki-burger',
-              clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-              privateKey,
-            }),
+          appInstance = firebase.initializeApp({
+            credential: certFn
+              ? certFn({
+                  projectId: process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || 'pochinki-burger',
+                  clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+                  privateKey,
+                })
+              : undefined,
           });
         } catch (err) {
           console.error('[FirebaseAdmin] Error initializing with private key env vars:', err);
@@ -53,7 +59,7 @@ export function getFirebaseAdmin(): {
           '[FirebaseAdmin] Warning: Neither FIREBASE_SERVICE_ACCOUNT_KEY nor (FIREBASE_PRIVATE_KEY & FIREBASE_CLIENT_EMAIL) are configured. ' +
           'Falling back to default credentials which may fail in serverless cloud environments (e.g. Vercel).'
         );
-        appInstance = initializeApp({
+        appInstance = firebase.initializeApp({
           projectId: process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || 'pochinki-burger',
         });
       }
@@ -61,8 +67,8 @@ export function getFirebaseAdmin(): {
   }
 
   return {
-    adminApp: appInstance,
-    adminDb: getFirestore(appInstance),
-    adminAuth: getAuth(appInstance),
+    adminApp: appInstance as App,
+    adminDb: getFirestore(appInstance as App),
+    adminAuth: getAuth(appInstance as App),
   };
 }
