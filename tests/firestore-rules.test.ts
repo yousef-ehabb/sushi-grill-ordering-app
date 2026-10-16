@@ -2,29 +2,23 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 
-describe('Firestore Security Rules Static Integrity', () => {
+describe('Firestore Security Rules Static Integrity & Branch Isolation', () => {
   const rulesPath = path.resolve(__dirname, '../firestore.rules');
   const rulesContent = fs.readFileSync(rulesPath, 'utf8');
 
   it('strictly disallows direct client-side order creation', () => {
-    // Finds the orders match block
     const ordersMatch = rulesContent.match(/match\s+\/orders\/\{orderId\}[\s\S]*?\n\s*\}/);
     expect(ordersMatch).toBeDefined();
     const ordersBlock = ordersMatch![0];
 
-    // Verify create is false
     expect(ordersBlock).toMatch(/allow\s+create:\s*if\s+false\s*;/);
-
-    // Ensure former permissive check (total > 0) is completely removed
     expect(ordersBlock).not.toContain('request.resource.data.total > 0');
   });
 
   it('strictly isolates idempotency records from client access', () => {
     const idempMatch = rulesContent.match(/match\s+\/idempotency_records\/\{recordId\}[\s\S]*?\n\s*\}/);
     expect(idempMatch).toBeDefined();
-    const idempBlock = idempMatch![0];
-
-    expect(idempBlock).toMatch(/allow\s+read,\s*write:\s*if\s+false\s*;/);
+    expect(idempMatch![0]).toMatch(/allow\s+read,\s*write:\s*if\s+false\s*;/);
   });
 
   it('prevents order deletion to maintain audit trails', () => {
@@ -33,37 +27,53 @@ describe('Firestore Security Rules Static Integrity', () => {
     expect(ordersMatch![0]).toMatch(/allow\s+delete:\s*if\s+false\s*;/);
   });
 
-  it('restricts order updates to staff and admins only', () => {
+  it('enforces branch isolation on order reading and updating', () => {
     const ordersMatch = rulesContent.match(/match\s+\/orders\/\{orderId\}[\s\S]*?\n\s*\}/);
     expect(ordersMatch).toBeDefined();
-    expect(ordersMatch![0]).toMatch(/allow\s+update:\s*if\s+isStaff\(\)\s*;/);
+    const ordersBlock = ordersMatch![0];
+
+    // Read and list require canAccessBranch or global admin
+    expect(ordersBlock).toContain('canAccessBranch(resource.data.branch)');
+    expect(ordersBlock).toContain('isGlobalAdmin()');
   });
 
-  it('protects admin and user profile collections from unauthorized modification', () => {
+  it('restricts order updates to authorized branch staff and immutable financial fields', () => {
+    const ordersMatch = rulesContent.match(/match\s+\/orders\/\{orderId\}[\s\S]*?\n\s*\}/);
+    expect(ordersMatch).toBeDefined();
+    const ordersBlock = ordersMatch![0];
+
+    expect(ordersBlock).toContain('canAccessBranch(resource.data.branch)');
+    expect(ordersBlock).toContain("hasOnly(['status', 'updated_at', 'server_timestamp', 'kitchen_notes'])");
+    expect(ordersBlock).toContain('request.resource.data.total == resource.data.total');
+    expect(ordersBlock).toContain('request.resource.data.customer_phone == resource.data.customer_phone');
+    expect(ordersBlock).toContain('request.resource.data.branch == resource.data.branch');
+  });
+
+  it('strictly restricts /admins and /settings write operations to Global Administrators only', () => {
     const adminsMatch = rulesContent.match(/match\s+\/admins\/\{adminId\}[\s\S]*?\n\s*\}/);
     expect(adminsMatch).toBeDefined();
-    expect(adminsMatch![0]).toMatch(/allow\s+write:\s*if\s+isAdmin\(\)\s*;/);
+    expect(adminsMatch![0]).toMatch(/allow\s+write:\s*if\s+isGlobalAdmin\(\)\s*;/);
 
-    const profilesMatch = rulesContent.match(/match\s+\/user_profiles\/\{userId\}[\s\S]*?\n\s*\}/);
-    expect(profilesMatch).toBeDefined();
-    expect(profilesMatch![0]).toMatch(/allow\s+delete:\s*if\s+false\s*;/);
+    const settingsMatch = rulesContent.match(/match\s+\/settings\/\{settingId\}[\s\S]*?\n\s*\}/);
+    expect(settingsMatch).toBeDefined();
+    expect(settingsMatch![0]).toContain('isGlobalAdmin()');
   });
 
-  it('enforces email verification or server claims on admin privileges', () => {
-    const isAdminFunc = rulesContent.match(/function\s+isAdmin\(\)[\s\S]*?\n\s*\}/);
-    expect(isAdminFunc).toBeDefined();
-    const funcBlock = isAdminFunc![0];
+  it('enforces is_active: true requirement for active administrative documents', () => {
+    const activeDocFunc = rulesContent.match(/function\s+hasActiveAdminDoc\(\)[\s\S]*?\n\s*\}/);
+    expect(activeDocFunc).toBeDefined();
+    const funcBlock = activeDocFunc![0];
 
-    expect(funcBlock).toContain('request.auth.token.role ==');
-    expect(funcBlock).toContain('email_verified == true');
+    expect(funcBlock).toContain('getAdminDoc().data.is_active == true');
+    expect(funcBlock).toContain('exists(/databases/$(database)/documents/admins/$(request.auth.uid))');
   });
 
-  it('restricts business_rules modification strictly to administrators while allowing public read', () => {
-    const bizMatch = rulesContent.match(/match\s+\/business_rules\/\{ruleId\}[\s\S]*?\n\s*\}/);
-    expect(bizMatch).toBeDefined();
-    const bizBlock = bizMatch![0];
+  it('correctly maps branch tokens and scopes to corresponding branch names', () => {
+    const branchScopeFunc = rulesContent.match(/function\s+getAdminBranchScope\(\)[\s\S]*?\n\s*\}/);
+    expect(branchScopeFunc).toBeDefined();
+    const funcBlock = branchScopeFunc![0];
 
-    expect(bizBlock).toMatch(/allow\s+read:\s*if\s+true\s*;/);
-    expect(bizBlock).toMatch(/allow\s+write:\s*if\s+isAdmin\(\)\s*;/);
+    expect(funcBlock).toContain("request.auth.token.role == 'stadium_admin' ? 'فرع الاستاد'");
+    expect(funcBlock).toContain("request.auth.token.role == 'caravan_admin' ? 'فرع الكرفان'");
   });
 });

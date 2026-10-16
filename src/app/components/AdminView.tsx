@@ -164,7 +164,7 @@ export const AdminView: React.FC = () => {
     // Subscribe to real-time updates (orders, products, settings)
     const unsubscribeOrders = ordersService.subscribeToAllOrders((liveOrders) => {
       useStore.setState({ orders: liveOrders });
-    });
+    }, adminBranchScope);
     const unsubscribeProducts = productsService.subscribeToProducts((liveProducts) => {
       useStore.getState().setProducts(liveProducts);
     });
@@ -177,7 +177,7 @@ export const AdminView: React.FC = () => {
       unsubscribeProducts();
       unsubscribeSettings();
     };
-  }, []);
+  }, [adminBranchScope]);
 
   // Sync local state when global data loads
   useEffect(() => {

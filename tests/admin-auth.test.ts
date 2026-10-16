@@ -19,9 +19,10 @@ class MockStorage {
   }
 }
 
-const { mockAuthState } = vi.hoisted(() => {
+const { mockAuthState, mockFirestoreData } = vi.hoisted(() => {
   return {
     mockAuthState: { currentUser: null as any },
+    mockFirestoreData: { adminDoc: null as any },
   };
 });
 
@@ -33,7 +34,10 @@ vi.mock('../src/lib/firebase', () => ({
 
 vi.mock('firebase/firestore', () => ({
   doc: vi.fn(),
-  getDoc: async () => ({ exists: () => false, data: () => ({}) }),
+  getDoc: async (_docRef: any) => ({
+    exists: () => !!mockFirestoreData.adminDoc,
+    data: () => mockFirestoreData.adminDoc || {},
+  }),
   setDoc: vi.fn(),
   updateDoc: vi.fn(),
 }));
@@ -42,6 +46,7 @@ describe('Admin Authentication & Privilege Escalation Hardening', () => {
   beforeEach(() => {
     (global as any).localStorage = new MockStorage();
     mockAuthState.currentUser = null;
+    mockFirestoreData.adminDoc = null;
   });
 
   it('verifies that no hardcoded passwords exist in useAuthStore.ts', () => {
@@ -57,7 +62,6 @@ describe('Admin Authentication & Privilege Escalation Hardening', () => {
   });
 
   it('rejects admin elevation from localStorage manipulation alone', async () => {
-    // Attacker injects fake admin session into localStorage
     localStorage.setItem(
       'pochinki_admin_session',
       JSON.stringify({ role: 'super_admin', scope: 'all', email: 'admin@pochinki.com' })
@@ -66,16 +70,11 @@ describe('Admin Authentication & Privilege Escalation Hardening', () => {
     mockAuthState.currentUser = null;
 
     const { useAuthStore } = await import('../src/app/store/useAuthStore');
-
-    // Execute checkSession
     await useAuthStore.getState().checkSession();
 
-    // Must NOT be admin!
     const state = useAuthStore.getState();
     expect(state.isAdmin).toBe(false);
     expect(state.user).toBeNull();
-
-    // Forged localStorage key must be purged
     expect(localStorage.getItem('pochinki_admin_session')).toBeNull();
   });
 
@@ -100,5 +99,78 @@ describe('Admin Authentication & Privilege Escalation Hardening', () => {
     expect(state.isAuthenticated).toBe(true);
     expect(state.user?.id).toBe('customer_123');
     expect(localStorage.getItem('pochinki_admin_session')).toBeNull();
+  });
+
+  it('strictly rejects access if admin record in Firestore has is_active: false', async () => {
+    mockAuthState.currentUser = {
+      uid: 'deactivated_admin',
+      email: 'former_staff@pochinki.com',
+      displayName: 'موظف معطل',
+      getIdTokenResult: async () => ({ claims: { role: 'stadium_admin' } }),
+    };
+
+    // Admin document exists but is marked inactive
+    mockFirestoreData.adminDoc = {
+      uid: 'deactivated_admin',
+      role: 'stadium_admin',
+      scope: 'فرع الاستاد',
+      is_active: false,
+    };
+
+    const { useAuthStore } = await import('../src/app/store/useAuthStore');
+    await useAuthStore.getState().checkSession();
+
+    const state = useAuthStore.getState();
+    expect(state.isAdmin).toBe(false);
+  });
+
+  it('correctly grants branch scope for active Stadium Branch admin', async () => {
+    mockAuthState.currentUser = {
+      uid: 'stadium_admin_uid',
+      email: 'stadium_admin@pochinki.com',
+      displayName: 'مدير فرع الاستاد',
+      getIdTokenResult: async () => ({ claims: { role: 'stadium_admin' } }),
+    };
+
+    mockFirestoreData.adminDoc = {
+      uid: 'stadium_admin_uid',
+      role: 'stadium_admin',
+      scope: 'فرع الاستاد',
+      is_active: true,
+    };
+
+    const { useAuthStore } = await import('../src/app/store/useAuthStore');
+    await useAuthStore.getState().checkSession();
+
+    const state = useAuthStore.getState();
+    expect(state.isAdmin).toBe(true);
+    expect(state.adminRole).toBe('stadium_admin');
+    expect(state.adminBranchScope).toBe('فرع الاستاد');
+    expect(state.adminTitle).toBe('فرع الاستاد');
+  });
+
+  it('correctly grants branch scope for active Caravan Branch admin', async () => {
+    mockAuthState.currentUser = {
+      uid: 'caravan_admin_uid',
+      email: 'caravan_admin@pochinki.com',
+      displayName: 'مدير فرع الكرفان',
+      getIdTokenResult: async () => ({ claims: { role: 'caravan_admin' } }),
+    };
+
+    mockFirestoreData.adminDoc = {
+      uid: 'caravan_admin_uid',
+      role: 'caravan_admin',
+      scope: 'فرع الكرفان',
+      is_active: true,
+    };
+
+    const { useAuthStore } = await import('../src/app/store/useAuthStore');
+    await useAuthStore.getState().checkSession();
+
+    const state = useAuthStore.getState();
+    expect(state.isAdmin).toBe(true);
+    expect(state.adminRole).toBe('caravan_admin');
+    expect(state.adminBranchScope).toBe('فرع الكرفان');
+    expect(state.adminTitle).toBe('فرع الكرفان');
   });
 });

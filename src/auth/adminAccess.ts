@@ -79,8 +79,9 @@ export function resolveAdminFromTokenClaims(claims: Record<string, unknown> | nu
 
 export function resolveAdminFromAdminRecord(data: Record<string, unknown> | null | undefined): AdminGrant | null {
   if (!data) return null;
+  if (data.is_active === false) return null;
   const role = (typeof data.role === 'string' ? data.role : 'super_admin') as AdminRole;
-  const scope = (typeof data.scope === 'string' ? data.scope : 'all') as AdminBranchScope;
+  const scope = (typeof data.scope === 'string' ? data.scope : (role === 'stadium_admin' ? 'فرع الاستاد' : role === 'caravan_admin' ? 'فرع الكرفان' : 'all')) as AdminBranchScope;
   const title =
     typeof data.title === 'string'
       ? data.title

@@ -140,7 +140,28 @@ async function loadUserProfile(fbUser: FirebaseUser): Promise<UserProfile> {
 async function checkIsFirebaseAdmin(fbUser: FirebaseUser): Promise<{ isAdmin: boolean; role: AdminRole; scope: AdminBranchScope; title: string } | null> {
     if (!fbUser) return null;
 
-    // 1. Check custom claims first (tamper-proof server-issued token claims)
+    // 1. Authoritative check: Firestore `/admins/{uid}` document (allows instant deactivation)
+    if (isFirebaseConfigured() && db) {
+        try {
+            const adminDoc = await getDoc(doc(db, 'admins', fbUser.uid));
+            if (adminDoc.exists()) {
+                const data = adminDoc.data();
+                // Strictly deny deactivated accounts
+                if (data.is_active === false) {
+                    console.warn('[Firebase Auth] Admin account is marked inactive');
+                    return null;
+                }
+                const role = (data.role || 'super_admin') as AdminRole;
+                const scope = (data.scope || (role === 'stadium_admin' ? 'فرع الاستاد' : role === 'caravan_admin' ? 'فرع الكرفان' : 'all')) as AdminBranchScope;
+                const title = data.title || (role === 'stadium_admin' ? 'فرع الاستاد' : role === 'caravan_admin' ? 'فرع الكرفان' : 'الإدارة العامة');
+                return { isAdmin: true, role, scope, title };
+            }
+        } catch (e) {
+            console.warn('[Firebase Auth] Error checking admins collection doc:', e);
+        }
+    }
+
+    // 2. Custom claims (tamper-proof server-issued token claims)
     try {
         const idTokenResult = await fbUser.getIdTokenResult(true);
         const role = idTokenResult.claims.role as string | undefined;
@@ -157,23 +178,7 @@ async function checkIsFirebaseAdmin(fbUser: FirebaseUser): Promise<{ isAdmin: bo
         console.warn('[Firebase Auth] Error inspecting ID token claims:', e);
     }
 
-    // 2. Check server-managed record in Firestore `/admins/{uid}`
-    if (isFirebaseConfigured() && db) {
-        try {
-            const adminDoc = await getDoc(doc(db, 'admins', fbUser.uid));
-            if (adminDoc.exists()) {
-                const data = adminDoc.data();
-                const role = (data.role || 'super_admin') as AdminRole;
-                const scope = (data.scope || 'all') as AdminBranchScope;
-                const title = data.title || (role === 'stadium_admin' ? 'فرع الاستاد' : role === 'caravan_admin' ? 'فرع الكرفان' : 'الإدارة العامة');
-                return { isAdmin: true, role, scope, title };
-            }
-        } catch (e) {
-            console.warn('[Firebase Auth] Error checking admins collection doc:', e);
-        }
-    }
-
-    // 3. Authenticated as designated administrator email
+    // 3. Fallback for primary administrator email only
     if (fbUser.email?.toLowerCase() === 'admin@pochinki.com') {
         return { isAdmin: true, role: 'super_admin', scope: 'all', title: 'الإدارة العامة' };
     }

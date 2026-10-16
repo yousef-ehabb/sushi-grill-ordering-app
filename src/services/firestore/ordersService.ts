@@ -379,17 +379,23 @@ export const ordersService = {
   },
 
   /**
-   * Subscribe in real-time to all orders for the Admin Screen
+   * Subscribe in real-time to all orders for the Admin Screen (with optional branch scoping)
    */
-  subscribeToAllOrders(callback: (orders: Order[]) => void): Unsubscribe {
+  subscribeToAllOrders(callback: (orders: Order[]) => void, branchScope?: string | null): Unsubscribe {
     if (!isFirebaseConfigured() || !db) {
       return () => {};
     }
 
-    const q = query(
-      collection(db, ORDERS_COLLECTION),
-      orderBy('created_at', 'desc')
-    );
+    const q = branchScope && branchScope !== 'all'
+      ? query(
+          collection(db, ORDERS_COLLECTION),
+          where('branch', '==', branchScope),
+          orderBy('created_at', 'desc')
+        )
+      : query(
+          collection(db, ORDERS_COLLECTION),
+          orderBy('created_at', 'desc')
+        );
 
     return onSnapshot(
       q,
