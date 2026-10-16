@@ -4,6 +4,12 @@ import { getAuth, type Auth } from 'firebase-admin/auth';
 
 let appInstance: App | null = null;
 
+export function isFirebaseAdminConfigured(): boolean {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) return true;
+  if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) return true;
+  return false;
+}
+
 export function getFirebaseAdmin(): {
   adminApp: App;
   adminDb: Firestore;
@@ -43,6 +49,10 @@ export function getFirebaseAdmin(): {
       }
 
       if (!appInstance) {
+        console.warn(
+          '[FirebaseAdmin] Warning: Neither FIREBASE_SERVICE_ACCOUNT_KEY nor (FIREBASE_PRIVATE_KEY & FIREBASE_CLIENT_EMAIL) are configured. ' +
+          'Falling back to default credentials which may fail in serverless cloud environments (e.g. Vercel).'
+        );
         appInstance = initializeApp({
           projectId: process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || 'pochinki-burger',
         });

@@ -8,6 +8,7 @@ import {
 import trackHandler from '../api/orders/track';
 
 vi.mock('../src/server/firebaseAdmin', () => ({
+  isFirebaseAdminConfigured: () => true,
   getFirebaseAdmin: () => ({
     adminDb: {
       collection: () => ({

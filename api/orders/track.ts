@@ -1,4 +1,4 @@
-import { getFirebaseAdmin } from '../../src/server/firebaseAdmin';
+import { getFirebaseAdmin, isFirebaseAdminConfigured } from '../../src/server/firebaseAdmin';
 import { normalizePhoneEgyptian } from '../../src/server/orderEngine';
 import { getClientIp, checkRateLimit, applyRateLimitHeaders } from '../../src/server/rateLimiter';
 
@@ -43,6 +43,16 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
+    if (!isFirebaseAdminConfigured()) {
+      console.error('[API/orders/track] Firebase Admin credentials not configured in environment variables');
+      return res.status(500).json({
+        success: false,
+        error: 'إعدادات خادم المتابعة غير مكتملة (يرجى ضبط متغيرات Firebase Admin في Vercel).',
+        code: 'FIREBASE_CREDENTIALS_MISSING',
+        details: 'Missing FIREBASE_SERVICE_ACCOUNT_KEY or (FIREBASE_PRIVATE_KEY and FIREBASE_CLIENT_EMAIL) in server environment variables.',
+      });
+    }
+
     const { adminDb } = getFirebaseAdmin();
     const normalizedInputPhone = normalizePhoneEgyptian(phone.trim());
 
@@ -111,10 +121,18 @@ export default async function handler(req: any, res: any) {
     });
   } catch (err: any) {
     console.error('[API/orders/track] Error fetching order:', err);
+    const isCredentialsError =
+      err?.message?.includes('Could not load the default credentials') ||
+      err?.message?.includes('NO_ADC_FOUND') ||
+      err?.code === 16;
+
     return res.status(500).json({
       success: false,
-      error: 'تعذر تحميل بيانات الطلب حالياً',
-      code: 'SERVER_ERROR',
+      error: isCredentialsError
+        ? 'إعدادات خادم المتابعة غير مكتملة (يرجى ضبط متغيرات Firebase Admin في Vercel).'
+        : 'تعذر تحميل بيانات الطلب حالياً',
+      code: isCredentialsError ? 'FIREBASE_CREDENTIALS_MISSING' : 'SERVER_ERROR',
+      details: err?.message,
     });
   }
 }

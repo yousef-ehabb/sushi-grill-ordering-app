@@ -32,6 +32,7 @@ const mockOrders: Record<string, any> = {
 };
 
 vi.mock('../src/server/firebaseAdmin', () => ({
+  isFirebaseAdminConfigured: () => true,
   getFirebaseAdmin: () => ({
     adminDb: {
       collection: () => ({
