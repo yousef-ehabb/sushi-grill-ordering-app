@@ -137,21 +137,48 @@ async function loadUserProfile(fbUser: FirebaseUser): Promise<UserProfile> {
     return profile;
 }
 
-async function checkIsFirebaseAdmin(fbUser: FirebaseUser): Promise<boolean> {
-    if (fbUser.email?.toLowerCase() === 'admin@pochinki.com') {
-        return true;
+async function checkIsFirebaseAdmin(fbUser: FirebaseUser): Promise<{ isAdmin: boolean; role: AdminRole; scope: AdminBranchScope; title: string } | null> {
+    if (!fbUser) return null;
+
+    // 1. Check custom claims first (tamper-proof server-issued token claims)
+    try {
+        const idTokenResult = await fbUser.getIdTokenResult(true);
+        const role = idTokenResult.claims.role as string | undefined;
+        if (role === 'admin' || role === 'super_admin') {
+            return { isAdmin: true, role: 'super_admin', scope: 'all', title: 'الإدارة العامة' };
+        }
+        if (role === 'stadium_admin') {
+            return { isAdmin: true, role: 'stadium_admin', scope: 'فرع الاستاد', title: 'فرع الاستاد' };
+        }
+        if (role === 'caravan_admin') {
+            return { isAdmin: true, role: 'caravan_admin', scope: 'فرع الكرفان', title: 'فرع الكرفان' };
+        }
+    } catch (e) {
+        console.warn('[Firebase Auth] Error inspecting ID token claims:', e);
     }
+
+    // 2. Check server-managed record in Firestore `/admins/{uid}`
     if (isFirebaseConfigured() && db) {
         try {
             const adminDoc = await getDoc(doc(db, 'admins', fbUser.uid));
             if (adminDoc.exists()) {
-                return true;
+                const data = adminDoc.data();
+                const role = (data.role || 'super_admin') as AdminRole;
+                const scope = (data.scope || 'all') as AdminBranchScope;
+                const title = data.title || (role === 'stadium_admin' ? 'فرع الاستاد' : role === 'caravan_admin' ? 'فرع الكرفان' : 'الإدارة العامة');
+                return { isAdmin: true, role, scope, title };
             }
         } catch (e) {
-            console.warn('[Firebase Auth] Error checking admins doc:', e);
+            console.warn('[Firebase Auth] Error checking admins collection doc:', e);
         }
     }
-    return false;
+
+    // 3. Authenticated as designated administrator email
+    if (fbUser.email?.toLowerCase() === 'admin@pochinki.com') {
+        return { isAdmin: true, role: 'super_admin', scope: 'all', title: 'الإدارة العامة' };
+    }
+
+    return null;
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -172,232 +199,210 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     login: async (username: string, password: string) => {
         set({ isLoading: true, error: null });
 
+        if (!username || !username.trim() || !password || !password.trim()) {
+            set({ isLoading: false, error: 'يرجى إدخال اسم المستخدم وكلمة المرور' });
+            return false;
+        }
+
         const trimmed = username.trim().toLowerCase();
         const account = ADMIN_ACCOUNTS[trimmed];
 
-        if (!account) {
-            set({ isLoading: false, error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
+        // Format email from alias if recognized, otherwise use raw input if email
+        const adminEmail = trimmed.includes('@')
+            ? trimmed
+            : (account ? `${trimmed}@pochinki.com` : `${trimmed}@pochinki.com`);
+
+        if (!isFirebaseConfigured() || !auth) {
+            set({ isLoading: false, error: 'خدمة Firebase غير مهيأة' });
             return false;
         }
-
-        const isMasterPassword = password === 'Pochinki@2026!';
-        let isFirebaseAuthenticated = false;
-
-        if (isFirebaseConfigured() && auth) {
-            try {
-                // Authenticate with Firebase Auth as admin@pochinki.com for all admin roles
-                // so Firestore security rules (write: if isAdmin()) permit branch and product updates
-                const cred = await signInWithEmailAndPassword(auth, 'admin@pochinki.com', 'Pochinki@2026!');
-                if (cred.user) {
-                    isFirebaseAuthenticated = true;
-                }
-            } catch (err) {
-                console.warn('[Firebase Auth] Admin sign in error:', err);
-            }
-        }
-
-        if (!isMasterPassword && !isFirebaseAuthenticated) {
-            set({ isLoading: false, error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
-            return false;
-        }
-
-        const sessionPayload = {
-            role: account.role,
-            scope: account.scope,
-            title: account.title,
-            name: account.defaultName,
-            email: trimmed.includes('@') ? trimmed : `${trimmed}@pochinki.com`,
-        };
 
         try {
-            localStorage.setItem('pochinki_admin_session', JSON.stringify(sessionPayload));
-        } catch (e) {
-            console.warn('[Auth] Failed to store admin session:', e);
+            // Strictly authenticate against Firebase Auth using provided credentials
+            const cred = await signInWithEmailAndPassword(auth, adminEmail, password);
+            if (!cred.user) {
+                set({ isLoading: false, error: 'فشل التحقق من بيانات الدخول' });
+                return false;
+            }
+
+            // Verify server authorization (claims, /admins collection, or verified admin account)
+            const adminInfo = await checkIsFirebaseAdmin(cred.user);
+            if (!adminInfo || !adminInfo.isAdmin) {
+                await firebaseSignOut(auth);
+                localStorage.removeItem('pochinki_admin_session');
+                set({
+                    user: null,
+                    isAuthenticated: false,
+                    isAdmin: false,
+                    isLoading: false,
+                    error: 'هذا الحساب ليس لديه صلاحيات وصول كمسؤول',
+                });
+                return false;
+            }
+
+            const sessionPayload = {
+                role: adminInfo.role,
+                scope: adminInfo.scope,
+                title: adminInfo.title,
+                name: cred.user.displayName || (account ? account.defaultName : 'مدير النظام (بوشنكي)'),
+                email: cred.user.email || adminEmail,
+            };
+
+            try {
+                localStorage.setItem('pochinki_admin_session', JSON.stringify(sessionPayload));
+            } catch (e) {
+                console.warn('[Auth] Failed to store admin session metadata:', e);
+            }
+
+            set({
+                user: {
+                    id: cred.user.uid,
+                    email: sessionPayload.email,
+                    name: sessionPayload.name,
+                    phone: '',
+                    address: '',
+                    avatar_url: null,
+                },
+                isAuthenticated: false,
+                isAdmin: true,
+                adminRole: adminInfo.role,
+                adminBranchScope: adminInfo.scope,
+                adminTitle: adminInfo.title,
+                isLoading: false,
+                error: null,
+            });
+
+            return true;
+        } catch (err: any) {
+            localStorage.removeItem('pochinki_admin_session');
+            let msg = 'اسم المستخدم أو كلمة المرور غير صحيحة';
+            if (err.code === 'auth/too-many-requests') {
+                msg = 'تم تعليق الحساب مؤقتاً بسبب كثرة محاولات الدخول الخاطئة. يرجى المحاولة لاحقاً.';
+            }
+            set({ isLoading: false, error: msg });
+            return false;
         }
-
-        set({
-            user: {
-                id: `admin_${account.role}`,
-                email: sessionPayload.email,
-                name: account.defaultName,
-                phone: '',
-                address: '',
-                avatar_url: null,
-            },
-            isAuthenticated: false,
-            isAdmin: true,
-            adminRole: account.role,
-            adminBranchScope: account.scope,
-            adminTitle: account.title,
-            isLoading: false,
-            error: null,
-        });
-
-        return true;
     },
 
     checkSession: async () => {
         set({ isLoading: true });
 
-        // 1. Check local admin session first
-        try {
-            const rawSession = localStorage.getItem('pochinki_admin_session');
-            if (rawSession) {
-                const session = JSON.parse(rawSession);
-                if (session && session.role && session.scope) {
-                    // Ensure Firebase Auth is active for Firestore write permissions
-                    if (isFirebaseConfigured() && auth && (!auth.currentUser || auth.currentUser.email !== 'admin@pochinki.com')) {
-                        signInWithEmailAndPassword(auth, 'admin@pochinki.com', 'Pochinki@2026!').catch(e => {
-                            console.warn('[Firebase Auth] Auto admin reconnect error:', e);
-                        });
-                    }
-
-                    set({
-                        user: {
-                            id: `admin_${session.role}`,
-                            email: session.email || '',
-                            name: session.name || 'مدير النظام',
-                            phone: '',
-                            address: '',
-                            avatar_url: null,
-                        },
-                        isAuthenticated: false,
-                        isAdmin: true,
-                        adminRole: session.role,
-                        adminBranchScope: session.scope,
-                        adminTitle: session.title,
-                        isLoading: false,
-                    });
-                    return;
-                }
-            }
-        } catch (e) {
-            console.warn('[Auth] Failed to restore admin session:', e);
-        }
-
+        // 1. Without configured Firebase Auth, no session can be authenticated
         if (!isFirebaseConfigured() || !auth) {
+            localStorage.removeItem('pochinki_admin_session');
             set({ user: null, isAuthenticated: false, isAdmin: false, adminRole: null, adminBranchScope: null, adminTitle: null, isLoading: false });
             return;
         }
 
+        // 2. Check active Firebase Auth user
         const currentUser = auth.currentUser;
-        if (currentUser) {
-            const isAdminUser = await checkIsFirebaseAdmin(currentUser);
-            if (isAdminUser) {
-                set({
-                    user: {
-                        id: currentUser.uid,
-                        email: currentUser.email || '',
-                        name: currentUser.displayName || 'مدير النظام (بوشنكي)',
-                        phone: '',
-                        address: '',
-                        avatar_url: null,
-                    },
-                    isAuthenticated: false,
-                    isAdmin: true,
-                    adminRole: 'super_admin',
-                    adminBranchScope: 'all',
-                    adminTitle: 'الإدارة العامة',
-                    isLoading: false,
-                });
-                return;
-            }
+        if (!currentUser) {
+            // Unauthenticated: strictly purge any client localStorage session
+            localStorage.removeItem('pochinki_admin_session');
+            set({ user: null, isAuthenticated: false, isAdmin: false, adminRole: null, adminBranchScope: null, adminTitle: null, isLoading: false });
+            return;
+        }
 
-            // Regular user
-            const profile = await loadUserProfile(currentUser);
+        // Verify server-side admin privilege
+        const adminInfo = await checkIsFirebaseAdmin(currentUser);
+        if (adminInfo && adminInfo.isAdmin) {
+            const rawSession = localStorage.getItem('pochinki_admin_session');
+            let session = rawSession ? JSON.parse(rawSession) : null;
+
             set({
-                user: profile,
-                isAuthenticated: true,
-                isAdmin: false,
-                adminRole: null,
-                adminBranchScope: null,
-                adminTitle: null,
+                user: {
+                    id: currentUser.uid,
+                    email: currentUser.email || '',
+                    name: currentUser.displayName || session?.name || 'مدير النظام (بوشنكي)',
+                    phone: '',
+                    address: '',
+                    avatar_url: null,
+                },
+                isAuthenticated: false,
+                isAdmin: true,
+                adminRole: adminInfo.role || session?.role || 'super_admin',
+                adminBranchScope: adminInfo.scope || session?.scope || 'all',
+                adminTitle: adminInfo.title || session?.title || 'الإدارة العامة',
                 isLoading: false,
             });
             return;
         }
 
-        if (!get().isAdmin) {
-            set({ user: null, isAuthenticated: false, isAdmin: false, adminRole: null, adminBranchScope: null, adminTitle: null, isLoading: false });
-        } else {
-            set({ isLoading: false });
-        }
+        // Regular customer session
+        localStorage.removeItem('pochinki_admin_session');
+        const profile = await loadUserProfile(currentUser);
+        set({
+            user: profile,
+            isAuthenticated: true,
+            isAdmin: false,
+            adminRole: null,
+            adminBranchScope: null,
+            adminTitle: null,
+            isLoading: false,
+        });
     },
 
     initSession: async () => {
         try {
             set({ isLoading: true });
 
-            // Restore stored admin session immediately if available
-            try {
-                const rawSession = localStorage.getItem('pochinki_admin_session');
-                if (rawSession) {
-                    const session = JSON.parse(rawSession);
-                    if (session && session.role && session.scope) {
-                        if (isFirebaseConfigured() && auth && (!auth.currentUser || auth.currentUser.email !== 'admin@pochinki.com')) {
-                            signInWithEmailAndPassword(auth, 'admin@pochinki.com', 'Pochinki@2026!').catch(e => {
-                                console.warn('[Firebase Auth] Auto admin reconnect in initSession error:', e);
-                            });
-                        }
-                        set({
-                            user: {
-                                id: `admin_${session.role}`,
-                                email: session.email || '',
-                                name: session.name || 'مدير النظام',
-                                phone: '',
-                                address: '',
-                                avatar_url: null,
-                            },
-                            isAuthenticated: false,
-                            isAdmin: true,
-                            adminRole: session.role,
-                            adminBranchScope: session.scope,
-                            adminTitle: session.title,
-                            isLoading: false,
-                        });
-                    }
-                }
-            } catch (e) {
-                // Ignore
-            }
-
             if (!isFirebaseConfigured() || !auth) {
-                if (!get().isAdmin) {
-                    set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false });
-                }
+                localStorage.removeItem('pochinki_admin_session');
+                set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false });
                 return;
             }
 
+            // Strictly listen to authoritative Firebase Auth state changes
             onAuthStateChanged(auth, async (fbUser) => {
                 if (fbUser) {
-                    const isAdminUser = await checkIsFirebaseAdmin(fbUser);
-                    if (isAdminUser) {
+                    const adminInfo = await checkIsFirebaseAdmin(fbUser);
+                    if (adminInfo && adminInfo.isAdmin) {
+                        const rawSession = localStorage.getItem('pochinki_admin_session');
+                        let session = rawSession ? JSON.parse(rawSession) : null;
+
                         set({
                             user: {
                                 id: fbUser.uid,
                                 email: fbUser.email || '',
-                                name: fbUser.displayName || 'مدير النظام (بوشنكي)',
+                                name: fbUser.displayName || session?.name || 'مدير النظام (بوشنكي)',
                                 phone: '',
                                 address: '',
                                 avatar_url: null,
                             },
                             isAuthenticated: false,
                             isAdmin: true,
+                            adminRole: adminInfo.role || session?.role || 'super_admin',
+                            adminBranchScope: adminInfo.scope || session?.scope || 'all',
+                            adminTitle: adminInfo.title || session?.title || 'الإدارة العامة',
                             isLoading: false,
                         });
                         return;
                     }
 
-                    // Regular user session
+                    // Regular customer user session
+                    localStorage.removeItem('pochinki_admin_session');
                     const profile = await loadUserProfile(fbUser);
                     set({
                         user: profile,
                         isAuthenticated: true,
                         isAdmin: false,
+                        adminRole: null,
+                        adminBranchScope: null,
+                        adminTitle: null,
                         isLoading: false,
                     });
                 } else {
-                    set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false });
+                    // No active Firebase Auth session: clear all privileges immediately
+                    localStorage.removeItem('pochinki_admin_session');
+                    set({
+                        user: null,
+                        isAuthenticated: false,
+                        isAdmin: false,
+                        adminRole: null,
+                        adminBranchScope: null,
+                        adminTitle: null,
+                        isLoading: false
+                    });
                 }
             });
         } catch {

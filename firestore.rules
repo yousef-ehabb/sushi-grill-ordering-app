@@ -10,7 +10,8 @@ service cloud.firestore {
     function isAdmin() {
       return isAuthenticated() && (
         request.auth.token.role == 'admin' ||
-        request.auth.token.email == 'admin@pochinki.com' ||
+        request.auth.token.role == 'super_admin' ||
+        (request.auth.token.email == 'admin@pochinki.com' && request.auth.token.email_verified == true) ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
     }
@@ -18,19 +19,21 @@ service cloud.firestore {
     function isStaff() {
       return isAuthenticated() && (
         request.auth.token.role == 'admin' ||
+        request.auth.token.role == 'super_admin' ||
         request.auth.token.role == 'kitchen' ||
         request.auth.token.role == 'staff' ||
-        request.auth.token.email == 'admin@pochinki.com' ||
+        (request.auth.token.email == 'admin@pochinki.com' && request.auth.token.email_verified == true) ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
     }
 
+    // Admins Collection - strictly restricted to administrators
     match /admins/{adminId} {
-      allow read: if isAuthenticated();
+      allow read: if isAdmin();
       allow write: if isAdmin();
     }
 
-    // User Profiles - users can read/write their own profile
+    // User Profiles - users can read/write their own profile; admins can inspect
     match /user_profiles/{userId} {
       allow read: if isAuthenticated() && (
         request.auth.uid == userId || isAdmin()
@@ -72,26 +75,38 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // Orders Collection
+    // Business Rules (e.g. category-level minimum ordering quantity constraints)
+    match /business_rules/{ruleId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+      // Orders Collection
     match /orders/{orderId} {
-      // Staff can read all orders; authenticated users can read their own
-      allow read: if isStaff() || (
+      // Staff can read all orders; authenticated users can only get their own
+      allow get: if isStaff() || (
         isAuthenticated() && resource.data.user_id == request.auth.uid
       );
 
-      // Allow listing orders for authenticated users (Firestore evaluates list rules separately)
-      allow list: if isStaff() || isAuthenticated();
+      // Authenticated users can only list orders matching their own user_id
+      allow list: if isStaff() || (
+        isAuthenticated() && resource.data.user_id == request.auth.uid
+      );
 
-      // Validate new order creation - anyone can create (guests + authenticated)
-      allow create: if request.resource.data.status == 'new' &&
-                       request.resource.data.total > 0;
+      // Direct client creation is strictly forbidden.
+      // All orders must be validated, priced, and created through the server-authoritative API.
+      allow create: if false;
 
-      // Only staff can update status; customers cannot modify existing orders
+      // Only authorized staff can update status; customers cannot modify existing orders
       allow update: if isStaff();
 
       // Disallow deletion to preserve audit trails
       allow delete: if false;
     }
+
+    // Idempotency records - strictly managed by server transaction
+    match /idempotency_records/{recordId} {
+      allow read, write: if false;
+    }
   }
 }
-

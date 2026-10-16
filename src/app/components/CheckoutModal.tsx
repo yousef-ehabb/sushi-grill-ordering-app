@@ -10,6 +10,7 @@ import { isProductAvailableInBranch, isBranchOpen, getBranchClosedMessage } from
 interface CheckoutModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onOpenTracking?: (orderId: string, phone: string) => void;
 }
 
 const EGYPTIAN_PHONE_REGEX = /^01[0125][0-9]{8}$/;
@@ -31,7 +32,7 @@ const sanitizeEgyptianPhone = (value: string): string => {
   return cleaned.slice(0, 11);
 };
 
-export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose }) => {
+export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, onOpenTracking }) => {
   const { cart, products, globalSettings, orderType, setOrderType, clearCart, submitOrder, loading } = useStore();
   const { user, isAuthenticated } = useAuthStore();
   const [step, setStep] = useState(1);
@@ -41,6 +42,9 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
     phone: '',
     address: '',
   });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [idempotencyKey, setIdempotencyKey] = useState<string>('');
+  const [createdOrderId, setCreatedOrderId] = useState<string | null>(null);
 
   const isValidPhone = EGYPTIAN_PHONE_REGEX.test(formData.phone);
   const isPhoneTouchedOrFilled = formData.phone.length > 0;
@@ -77,7 +81,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
     return (p && !p.is_available) || !item.is_available;
   });
   const hasUnavailableItems = unavailableCartItems.length > 0;
-  const isSubmitDisabled = loading || !orderType || !isBranchValid || !isSelectedBranchOpen || hasBranchUnavailableItems || !!isWebsiteClosed || hasUnavailableItems || cart.length === 0 || !isFormValid;
+  const isSubmitDisabled = loading || isSubmitting || !orderType || !isBranchValid || !isSelectedBranchOpen || hasBranchUnavailableItems || !!isWebsiteClosed || hasUnavailableItems || cart.length === 0 || !isFormValid;
 
   // Auto-close if cart becomes empty in real-time (e.g. item removed)
   useEffect(() => {
@@ -97,12 +101,16 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
     }
   }, [isOpen, isAuthenticated, user]);
 
-  // Reset form when modal closes
+  // Reset form and manage idempotency session
   useEffect(() => {
-    if (!isOpen) {
+    if (isOpen) {
+      setIdempotencyKey(`idemp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`);
+    } else {
       setStep(1);
       setFormData({ name: '', phone: '', address: '' });
       setSelectedBranch('');
+      setIdempotencyKey('');
+      setIsSubmitting(false);
     }
   }, [isOpen]);
 
@@ -113,6 +121,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting || loading) return;
+
     if (isSubmitDisabled || !isValidPhone || !isBranchValid || !isSelectedBranchOpen || hasBranchUnavailableItems) {
       if (!isBranchValid) {
         toast.error('يرجى اختيار الفرع (فرع الاستاد أو فرع الكرفان)');
@@ -133,34 +143,43 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
       return;
     }
 
-    const orderId = await submitOrder({
-      customer_name: formData.name,
-      customer_phone: formData.phone,
-      address: orderType === 'delivery' ? formData.address : undefined,
-      user_id: isAuthenticated && user ? user.id : undefined,
-      type: orderType || 'pickup',
-      branch: selectedBranch,
-      items: [...cart],
-      total,
-    });
+    setIsSubmitting(true);
+    try {
+      const activeKey = idempotencyKey || `idemp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
-    if (orderId) {
-      setStep(2);
-      clearCart();
-      toast.success('تم استلام طلبك بنجاح!', {
-        description: `رقم الطلب: #${orderId.slice(0, 8).toUpperCase()}`,
+      const orderId = await submitOrder({
+        customer_name: formData.name,
+        customer_phone: formData.phone,
+        address: orderType === 'delivery' ? formData.address : undefined,
+        user_id: isAuthenticated && user ? user.id : undefined,
+        type: orderType || 'pickup',
+        branch: selectedBranch,
+        items: [...cart],
+        total,
+        idempotency_key: activeKey,
       });
-    } else {
-      // Show server-side validation error
-      const errorMessage = useStore.getState().error;
-      toast.error('لم يتم إرسال الطلب', {
-        description: errorMessage || 'يرجى المحاولة مرة أخرى.',
-        duration: 6000,
-      });
-      // If cart became empty because unavailable items were removed, close checkout modal
-      if (useStore.getState().cart.length === 0) {
-        onClose();
+
+      if (orderId) {
+        setCreatedOrderId(orderId);
+        setStep(2);
+        clearCart();
+        toast.success('تم استلام طلبك بنجاح!', {
+          description: `رقم الطلب: #${orderId.slice(0, 8).toUpperCase()}`,
+        });
+      } else {
+        // Show server-side validation error
+        const errorMessage = useStore.getState().error;
+        toast.error('لم يتم إرسال الطلب', {
+          description: errorMessage || 'يرجى المحاولة مرة أخرى.',
+          duration: 6000,
+        });
+        // If cart became empty because unavailable items were removed, close checkout modal
+        if (useStore.getState().cart.length === 0) {
+          onClose();
+        }
       }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -480,15 +499,50 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
                   <CheckCircle2 className="w-10 h-10 sm:w-12 sm:h-12 text-green-600" />
                 </div>
                 <h2 className="text-2xl sm:text-3xl font-black text-slate-900 mb-2">تم بنجاح!</h2>
-                <p className="text-slate-500 mb-6 sm:mb-8 max-w-[280px] leading-relaxed text-sm sm:text-base">
-                  شكراً لطلبك. سنتواصل معك لتأكيد الطلب قريباً.
+                <p className="text-slate-500 mb-4 max-w-[280px] leading-relaxed text-sm sm:text-base">
+                  شكراً لطلبك. تم إرسال طلبك بنجاح وجاري تجهيزه بالمطعم.
                 </p>
-                <button
-                  onClick={onClose}
-                  className="w-full bg-slate-900 text-white py-3.5 sm:py-4 rounded-xl font-bold hover:bg-slate-800 transition-all shadow-lg active:scale-95 cursor-pointer text-sm sm:text-base"
-                >
-                  العودة للقائمة
-                </button>
+                {createdOrderId && (
+                  <div className="mb-6 p-3 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between gap-3 w-full max-w-xs">
+                    <div className="text-right">
+                      <span className="text-[11px] text-slate-400 block font-bold">رقم الطلب للمتابعة</span>
+                      <span className="text-sm font-mono font-black text-slate-800">{createdOrderId}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard?.writeText(createdOrderId);
+                        toast.success('تم نسخ رقم الطلب');
+                      }}
+                      className="px-2.5 py-1 text-xs font-bold bg-white text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors"
+                    >
+                      نسخ
+                    </button>
+                  </div>
+                )}
+                <div className="space-y-2.5 w-full max-w-xs">
+                  {onOpenTracking && createdOrderId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id = createdOrderId;
+                        const phone = formData.phone;
+                        onClose();
+                        onOpenTracking(id, phone);
+                      }}
+                      className="w-full bg-primary hover:bg-red-700 text-white py-3.5 rounded-xl font-bold transition-all shadow-lg shadow-red-500/20 active:scale-95 cursor-pointer text-sm sm:text-base flex items-center justify-center gap-2"
+                    >
+                      <span>تتبع حالة الطلب الآن</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="w-full bg-slate-100 text-slate-700 py-3 sm:py-3.5 rounded-xl font-bold hover:bg-slate-200 transition-all active:scale-95 cursor-pointer text-sm sm:text-base"
+                  >
+                    العودة للقائمة
+                  </button>
+                </div>
               </div>
             )}
           </motion.div>

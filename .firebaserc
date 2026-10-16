@@ -1,6 +1,7 @@
 {
   "projects": {
-    "default": "pochinki-burger"
+    "default": "pochinki-burger",
+    "staging": "pochinki-burger-staging"
   },
   "targets": {},
   "etags": {}

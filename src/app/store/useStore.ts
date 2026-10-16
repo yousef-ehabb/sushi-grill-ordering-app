@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { doc, updateDoc, collection, getDocs, query, where, addDoc, deleteDoc, setDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db, isFirebaseConfigured } from '../../lib/firebase';
+import { auth, db, isFirebaseConfigured } from '../../lib/firebase';
 import { getStorage } from 'firebase/storage';
 import { toast } from 'sonner';
 import { broadcastSyncEvent } from '../utils/realtimeSync';
@@ -177,7 +177,7 @@ interface AppState {
   clearCart: () => void;
 
   // Order Actions
-  submitOrder: (order: Omit<Order, 'id' | 'created_at' | 'status' | 'items'> & { items: CartItem[] }) => Promise<string | null>;
+  submitOrder: (order: Omit<Order, 'id' | 'created_at' | 'status' | 'items'> & { items: CartItem[]; idempotency_key?: string }) => Promise<string | null>;
   reorderFromHistory: (items: OrderItem[]) => { added: number; skipped: string[] };
 
   // Admin Actions
@@ -189,7 +189,7 @@ interface AppState {
   // Sauce Management
   toggleOptionActive: (optionId: string) => Promise<void>;
   createOption: (groupId: string, data: { name_ar: string; price_delta: number }) => Promise<ProductOption | null>;
-  updateOption: (optionId: string, data: Partial<Pick<ProductOption, 'name_ar' | 'price_delta'>>) => Promise<void>;
+  updateOption: (optionId: string, data: Partial<Pick<ProductOption, 'name_ar' | 'price_delta' | 'branch_availability' | 'is_active'>>) => Promise<void>;
   deleteOption: (optionId: string) => Promise<void>;
 
   // Operational Control Actions
@@ -347,8 +347,13 @@ export const useStore = create<AppState>()(
 
       fetchOrders: async () => {
         try {
-          const orders = await ordersService.getAllOrders();
-          set({ orders });
+          const authUser = auth?.currentUser;
+          if (authUser) {
+            const orders = await ordersService.getUserOrders(authUser.uid);
+            set({ orders });
+          } else {
+            set({ orders: [] });
+          }
         } catch (error) {
           console.error('Failed to fetch orders:', error);
         }
@@ -356,12 +361,17 @@ export const useStore = create<AppState>()(
 
       fetchActiveOrder: async () => {
         try {
-          const orders = await ordersService.getAllOrders();
-          const active = orders.find(
-            (o) => o.status !== 'completed' && o.status !== 'cancelled'
-          );
-          if (active) {
-            set({ activeOrder: { id: active.id, status: active.status } });
+          const authUser = auth?.currentUser;
+          if (authUser) {
+            const orders = await ordersService.getUserOrders(authUser.uid);
+            const active = orders.find(
+              (o) => o.status !== 'completed' && o.status !== 'cancelled'
+            );
+            if (active) {
+              set({ activeOrder: { id: active.id, status: active.status } });
+            } else {
+              set({ activeOrder: null });
+            }
           } else {
             set({ activeOrder: null });
           }
@@ -540,10 +550,7 @@ export const useStore = create<AppState>()(
             return null;
           }
 
-          const clientComputedTotal = orderData.items.reduce((sum, item) => {
-            const itemTotal = (item.price + (item.optionsPrice || 0)) * item.quantity;
-            return sum + itemTotal;
-          }, 0);
+          const idempotencyKey = orderData.idempotency_key || `idemp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
           const orderId = await ordersService.createOrder({
             customer_name: orderData.customer_name,
@@ -552,8 +559,11 @@ export const useStore = create<AppState>()(
             user_id: orderData.user_id,
             type: orderData.type,
             branch: orderData.branch,
-            total: clientComputedTotal,
+            total: orderData.total || 0,
+            subtotal: orderData.total || 0,
             status: 'new',
+            idempotency_key: idempotencyKey,
+            raw_items: orderData.items,
             items: orderData.items.map((item) => ({
               id: 'item_' + Math.random().toString(36).substring(2, 7),
               product_id: item.id,

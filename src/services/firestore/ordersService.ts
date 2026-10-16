@@ -12,18 +12,25 @@ import {
   serverTimestamp,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { db, isFirebaseConfigured } from '../../lib/firebase';
+import { auth, db, isFirebaseConfigured } from '../../lib/firebase';
 import type { Order, OrderStatus } from '../../app/store/useStore';
 
 const ORDERS_COLLECTION = 'orders';
 
 export const ordersService = {
   /**
-   * Create a new order in Firestore
+   * Direct Firestore creation fallback for local development (npm run dev)
+   * Activated only when the Vercel Serverless API (/api/orders/create) is not running locally.
    */
-  async createOrder(orderData: Omit<Order, 'id' | 'created_at'>): Promise<string> {
+  async createOrderDirectFallback(
+    orderData: Omit<Order, 'id' | 'created_at'> & {
+      idempotency_key?: string;
+      raw_items?: any[];
+      subtotal?: number;
+      delivery_fee?: number;
+    }
+  ): Promise<string> {
     if (!isFirebaseConfigured() || !db) {
-      // Mock mode: generate local ID
       const mockId = 'ord_' + Math.random().toString(36).substring(2, 9);
       console.info('[Mock] Order created locally:', mockId);
       return mockId;
@@ -33,7 +40,16 @@ export const ordersService = {
       const ordersRef = collection(db, ORDERS_COLLECTION);
       const newOrderDoc = doc(ordersRef);
 
-      // Cleanly sanitize payload to prevent Firestore undefined errors
+      const items = (orderData.items || []).map((item) => ({
+        id: item.id || 'item_' + Math.random().toString(36).substring(2, 7),
+        product_id: item.product_id || '',
+        name_ar: item.name_ar || '',
+        quantity: Number(item.quantity) || 1,
+        unit_price: Number(item.unit_price) || 0,
+        selected_option_ids: Array.isArray(item.selected_option_ids) ? item.selected_option_ids : [],
+        special_instructions: item.special_instructions || '',
+      }));
+
       const orderPayload: Record<string, any> = {
         id: newOrderDoc.id,
         customer_name: orderData.customer_name?.trim() || 'عميل بوشنكي',
@@ -43,25 +59,125 @@ export const ordersService = {
         type: orderData.type || 'pickup',
         branch: orderData.branch?.trim() || '',
         total: Number(orderData.total) || 0,
+        subtotal: Number(orderData.subtotal || orderData.total) || 0,
+        delivery_fee: Number(orderData.delivery_fee) || 0,
         status: 'new' as OrderStatus,
         created_at: new Date().toISOString(),
         server_timestamp: serverTimestamp(),
-        items: (orderData.items || []).map((item) => ({
-          id: item.id || 'item_' + Math.random().toString(36).substring(2, 7),
-          product_id: item.product_id || '',
-          name_ar: item.name_ar || '',
-          quantity: Number(item.quantity) || 1,
-          unit_price: Number(item.unit_price) || 0,
-          selected_option_ids: Array.isArray(item.selected_option_ids) ? item.selected_option_ids : [],
-          special_instructions: item.special_instructions || '',
-        })),
+        items,
       };
 
       await setDoc(newOrderDoc, orderPayload);
+      console.info('[OrdersService] [Local Dev Fallback] Order created directly in Firestore:', newOrderDoc.id);
       return newOrderDoc.id;
     } catch (error) {
-      console.error('[Firestore] Error creating order:', error);
+      console.error('[OrdersService] Direct fallback creation failed:', error);
       throw error;
+    }
+  },
+
+  /**
+   * Create a new order via trusted server-authoritative API with atomic idempotency
+   */
+  async createOrder(
+    orderData: Omit<Order, 'id' | 'created_at'> & {
+      idempotency_key?: string;
+      raw_items?: any[];
+      subtotal?: number;
+      delivery_fee?: number;
+    }
+  ): Promise<string> {
+    if (!isFirebaseConfigured() || !db) {
+      const mockId = 'ord_' + Math.random().toString(36).substring(2, 9);
+      console.info('[Mock] Order created locally:', mockId);
+      return mockId;
+    }
+
+    const rawCartItems = (orderData.raw_items && orderData.raw_items.length > 0)
+      ? orderData.raw_items
+      : (orderData.items || []).map((item) => ({
+          id: item.product_id || '',
+          quantity: item.quantity,
+          selectedOptionIds: item.selected_option_ids || [],
+          specialInstructions: item.special_instructions || '',
+        }));
+
+    const serverItems = rawCartItems.map((item: any) => ({
+      product_id: item.id || item.product_id,
+      quantity: Number(item.quantity) || 1,
+      selected_option_ids: Array.isArray(item.selectedOptionIds) ? item.selectedOptionIds : (item.selected_option_ids || []),
+      special_instructions: item.specialInstructions || item.special_instructions || '',
+    }));
+
+    let idToken: string | null = null;
+    if (auth && auth.currentUser) {
+      try {
+        idToken = await auth.currentUser.getIdToken();
+      } catch (tokenErr) {
+        console.warn('[OrdersService] Error getting auth token:', tokenErr);
+      }
+    }
+
+    let response: Response;
+    try {
+      response = await fetch('/api/orders/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(idToken ? { 'Authorization': `Bearer ${idToken}` } : {}),
+        },
+        body: JSON.stringify({
+          customer_name: orderData.customer_name,
+          customer_phone: orderData.customer_phone,
+          address: orderData.address,
+          type: orderData.type,
+          branch: orderData.branch,
+          items: serverItems,
+          idempotency_key: orderData.idempotency_key,
+        }),
+      });
+    } catch (netErr) {
+      if (import.meta.env.DEV) {
+        console.warn('[OrdersService] Serverless API route unreachable in local dev. Using direct Firestore fallback.');
+        return await this.createOrderDirectFallback(orderData);
+      }
+      throw netErr;
+    }
+
+    if (response.status === 404 && import.meta.env.DEV) {
+      console.warn('[OrdersService] /api/orders/create returned 404 in local Vite dev server. Using direct Firestore fallback.');
+      return await this.createOrderDirectFallback(orderData);
+    }
+
+    const data = await response.json().catch(() => null);
+
+    if (!response.ok || !data?.success) {
+      const errorMsg = data?.error || 'فشل إنشاء الطلب في الخادم، يرجى المحاولة مرة أخرى.';
+      throw new Error(errorMsg);
+    }
+
+    return data.orderId;
+  },
+
+  /**
+   * Track order for guests securely through the server endpoint
+   */
+  async trackGuestOrder(orderId: string, phone: string): Promise<Order | null> {
+    try {
+      const res = await fetch(`/api/orders/track?orderId=${encodeURIComponent(orderId)}&phone=${encodeURIComponent(phone)}`);
+      if (res.status === 404 && import.meta.env.DEV) {
+        console.warn('[OrdersService] /api/orders/track is 404 in local Vite dev server. Falling back to direct getOrderById.');
+        return await this.getOrderById(orderId);
+      }
+      const data = await res.json();
+      if (!res.ok || !data?.success) return null;
+      return data.order;
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        return await this.getOrderById(orderId);
+      }
+      console.error('[OrdersService] Error tracking guest order:', err);
+      return null;
     }
   },
 
@@ -96,6 +212,31 @@ export const ordersService = {
         console.error('[Firestore] Error fetching all orders fallback:', fallbackError);
         return [];
       }
+    }
+  },
+
+  /**
+   * Fetch orders for a specific authenticated user (complies with security rules)
+   */
+  async getUserOrders(userId: string): Promise<Order[]> {
+    if (!isFirebaseConfigured() || !db || !userId) {
+      return [];
+    }
+
+    try {
+      const q = query(
+        collection(db, ORDERS_COLLECTION),
+        where('user_id', '==', userId)
+      );
+      const snapshot = await getDocs(q);
+      const orders = snapshot.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...(docSnap.data() as Omit<Order, 'id'>),
+      }));
+      return orders.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    } catch (error) {
+      console.warn('[Firestore] Error fetching user orders:', error);
+      return [];
     }
   },
 

@@ -1,0 +1,93 @@
+import { getFirebaseAdmin } from '../../src/server/firebaseAdmin';
+import { normalizePhoneEgyptian } from '../../src/server/orderEngine';
+import { getClientIp, checkRateLimit, applyRateLimitHeaders } from '../../src/server/rateLimiter';
+
+export default async function handler(req: any, res: any) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+
+  if (req.method !== 'GET') {
+    return res.status(405).json({ success: false, error: 'Method not allowed' });
+  }
+
+  // Rate Limiting Protection (30 track queries per 5 minutes per IP)
+  const clientIp = getClientIp(req);
+  const rateLimitResult = await checkRateLimit(clientIp, {
+    prefix: 'order_track',
+    maxRequests: 30,
+    windowSeconds: 300,
+  });
+  applyRateLimitHeaders(res, rateLimitResult);
+
+  if (!rateLimitResult.allowed) {
+    return res.status(429).json({
+      success: false,
+      error: 'لقد تجاوزت عدد محاولات الاستعلام المسموح بها، يرجى الانتظار قليلاً والمحاولة لاحقاً.',
+      code: 'RATE_LIMIT_EXCEEDED',
+    });
+  }
+
+  const { orderId, phone } = req.query;
+
+  if (!orderId || typeof orderId !== 'string' || !phone || typeof phone !== 'string') {
+    return res.status(400).json({
+      success: false,
+      error: 'يرجى تقديم رقم الطلب ورقم الهاتف للمتابعة',
+      code: 'MISSING_PARAMS',
+    });
+  }
+
+  try {
+    const { adminDb } = getFirebaseAdmin();
+    const normalizedInputPhone = normalizePhoneEgyptian(phone.trim());
+
+    const orderDoc = await adminDb.collection('orders').doc(orderId.trim()).get();
+    if (!orderDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        error: 'لم يتم العثور على الطلب المطلوب',
+        code: 'NOT_FOUND',
+      });
+    }
+
+    const data = orderDoc.data() || {};
+    const storedPhone = normalizePhoneEgyptian(data.customer_phone || '');
+
+    // Prevent cross-customer enumeration: require exact phone match
+    if (storedPhone !== normalizedInputPhone) {
+      return res.status(404).json({
+        success: false,
+        error: 'لم يتم العثور على الطلب المطلوب',
+        code: 'NOT_FOUND',
+      });
+    }
+
+    // Return sanitized public tracking representation
+    return res.status(200).json({
+      success: true,
+      order: {
+        id: orderDoc.id,
+        status: data.status,
+        type: data.type,
+        branch: data.branch,
+        subtotal: data.subtotal,
+        delivery_fee: data.delivery_fee,
+        total: data.total,
+        created_at: data.created_at,
+        items: data.items,
+      },
+    });
+  } catch (err: any) {
+    console.error('[API/orders/track] Error fetching order:', err);
+    return res.status(500).json({
+      success: false,
+      error: 'تعذر تحميل بيانات الطلب حالياً',
+      code: 'SERVER_ERROR',
+    });
+  }
+}
