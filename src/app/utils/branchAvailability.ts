@@ -39,23 +39,43 @@ export function isOptionAvailableInBranch(option: ProductOption, branch: string)
  */
 export function isBranchOpen(
   globalSettings: GlobalSettings | null | undefined,
-  branch: string
-): { isOpen: boolean; closedMessage: string } {
+  branch?: string | null
+): boolean {
   if (!globalSettings) {
-    return { isOpen: true, closedMessage: '' };
+    return true;
   }
   if (globalSettings.is_website_open === false) {
-    return {
-      isOpen: false,
-      closedMessage: globalSettings.closed_message || 'المطعم مغلق حالياً ولا يستقبل طلبات جديدة.',
-    };
+    return false;
+  }
+  if (!branch) {
+    return true;
   }
   const branchStatus = globalSettings.branches?.[branch];
   if (branchStatus && branchStatus.is_open === false) {
-    return {
-      isOpen: false,
-      closedMessage: branchStatus.closed_message || `${branch} مغلق حالياً ولا يستقبل طلبات جديدة.`,
-    };
+    return false;
   }
-  return { isOpen: true, closedMessage: '' };
+  return true;
+}
+
+/**
+ * Get branch closure message.
+ */
+export function getBranchClosedMessage(
+  globalSettings: GlobalSettings | null | undefined,
+  branch?: string | null
+): string {
+  if (!globalSettings) {
+    return '';
+  }
+  if (globalSettings.is_website_open === false) {
+    return globalSettings.closed_message || 'المطعم مغلق حالياً، نسعد باستقبال طلباتكم في أوقات العمل القادمة.';
+  }
+  if (!branch) {
+    return '';
+  }
+  const branchStatus = globalSettings.branches?.[branch];
+  if (branchStatus && branchStatus.is_open === false) {
+    return branchStatus.closed_message || `${branch} مغلق حالياً، نسعد باستقبال طلباتكم في أوقات العمل القادمة.`;
+  }
+  return '';
 }

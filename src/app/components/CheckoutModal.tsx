@@ -5,7 +5,7 @@ import { useAuthStore } from '../store/useAuthStore';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { clsx } from 'clsx';
-import { isProductAvailableInBranch, isBranchOpen } from '../utils/branchAvailability';
+import { isProductAvailableInBranch, isBranchOpen, getBranchClosedMessage } from '../utils/branchAvailability';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -55,9 +55,9 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
 
   // Branch status check
   const isSelectedBranchOpen = selectedBranch ? isBranchOpen(globalSettings, selectedBranch) : true;
-  const branchClosedMessage = selectedBranch && globalSettings?.branches?.[selectedBranch]?.closed_message
-    ? globalSettings.branches[selectedBranch].closed_message
-    : `${selectedBranch} مغلق حالياً، نسعد باستقبال طلباتكم في أوقات العمل القادمة.`;
+  const branchClosedMessage = selectedBranch
+    ? getBranchClosedMessage(globalSettings, selectedBranch) || `${selectedBranch} مغلق حالياً، نسعد باستقبال طلباتكم في أوقات العمل القادمة.`
+    : '';
 
   // Branch items availability check
   const unavailableInSelectedBranch = useMemo(() => {

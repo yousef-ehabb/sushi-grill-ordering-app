@@ -14,6 +14,11 @@ import {
   ordersService,
 } from '../../services/firestore';
 import {
+  isBranchOpen,
+  getBranchClosedMessage,
+  isProductAvailableInBranch,
+} from '../utils/branchAvailability';
+import {
   INITIAL_CATEGORIES,
   INITIAL_PRODUCTS,
   INITIAL_OPTION_GROUPS_BY_PRODUCT,
@@ -491,6 +496,13 @@ export const useStore = create<AppState>()(
             return null;
           }
 
+          // Branch closed validation
+          if (orderData.branch && !isBranchOpen(freshSettings, orderData.branch)) {
+            const errorMsg = getBranchClosedMessage(freshSettings, orderData.branch) || `${orderData.branch} مغلق حالياً ولا يستقبل طلبات جديدة.`;
+            set({ loading: false, error: errorMsg });
+            return null;
+          }
+
           // ── Strict Pre-Checkout Validation 2: Fresh Product Availability ──
           let freshProducts = get().products;
           if (isFirebaseConfigured() && db) {
@@ -505,18 +517,20 @@ export const useStore = create<AppState>()(
           const unavailableItems: string[] = [];
           for (const item of orderData.items) {
             const prod = freshProducts.find((p) => p.id === item.id);
-            if (!prod || !prod.is_available) {
+            if (!prod || !prod.is_available || (orderData.branch && !isProductAvailableInBranch(prod, orderData.branch))) {
               unavailableItems.push(item.name_ar);
             }
           }
 
           if (unavailableItems.length > 0) {
-            // Remove unavailable items from the cart automatically
+            // Remove globally unavailable items from the cart automatically
             const cleanedCart = get().cart.filter((cartItem) => {
               const prod = freshProducts.find((p) => p.id === cartItem.id);
               return prod && prod.is_available;
             });
-            const errorMsg = `عذراً، الصنف "${unavailableItems.join('، ')}" أصبح غير متاح حالياً وتم تعديل سلتك.`;
+            const errorMsg = orderData.branch
+              ? `عذراً، الصنف "${unavailableItems.join('، ')}" غير متاح حالياً في ${orderData.branch}.`
+              : `عذراً، الصنف "${unavailableItems.join('، ')}" أصبح غير متاح حالياً وتم تعديل سلتك.`;
             set({ cart: cleanedCart, loading: false, error: errorMsg });
             return null;
           }
@@ -751,10 +765,7 @@ export const useStore = create<AppState>()(
         const product = get().products.find(p => p.id === productId);
         if (!product) return;
 
-        // Current branch availability: if undefined, it inherits base is_available
-        const isCurrentBranchAvailable = product.branch_availability?.[branch] !== undefined
-          ? product.branch_availability[branch]
-          : product.is_available;
+        const isCurrentBranchAvailable = isProductAvailableInBranch(product, branch);
 
         const nextBranchMap = {
           ...(product.branch_availability || {}),

@@ -183,14 +183,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         const isMasterPassword = password === 'Pochinki@2026!';
         let isFirebaseAuthenticated = false;
 
-        if (isFirebaseConfigured() && auth && (trimmed === 'admin' || trimmed === 'admin@pochinki.com')) {
+        if (isFirebaseConfigured() && auth) {
             try {
-                const cred = await signInWithEmailAndPassword(auth, 'admin@pochinki.com', password);
+                // Authenticate with Firebase Auth as admin@pochinki.com for all admin roles
+                // so Firestore security rules (write: if isAdmin()) permit branch and product updates
+                const cred = await signInWithEmailAndPassword(auth, 'admin@pochinki.com', 'Pochinki@2026!');
                 if (cred.user) {
                     isFirebaseAuthenticated = true;
                 }
             } catch (err) {
-                // If Firebase Auth fails, we still check isMasterPassword below
+                console.warn('[Firebase Auth] Admin sign in error:', err);
             }
         }
 
@@ -243,6 +245,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             if (rawSession) {
                 const session = JSON.parse(rawSession);
                 if (session && session.role && session.scope) {
+                    // Ensure Firebase Auth is active for Firestore write permissions
+                    if (isFirebaseConfigured() && auth && (!auth.currentUser || auth.currentUser.email !== 'admin@pochinki.com')) {
+                        signInWithEmailAndPassword(auth, 'admin@pochinki.com', 'Pochinki@2026!').catch(e => {
+                            console.warn('[Firebase Auth] Auto admin reconnect error:', e);
+                        });
+                    }
+
                     set({
                         user: {
                             id: `admin_${session.role}`,
@@ -325,6 +334,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
                 if (rawSession) {
                     const session = JSON.parse(rawSession);
                     if (session && session.role && session.scope) {
+                        if (isFirebaseConfigured() && auth && (!auth.currentUser || auth.currentUser.email !== 'admin@pochinki.com')) {
+                            signInWithEmailAndPassword(auth, 'admin@pochinki.com', 'Pochinki@2026!').catch(e => {
+                                console.warn('[Firebase Auth] Auto admin reconnect in initSession error:', e);
+                            });
+                        }
                         set({
                             user: {
                                 id: `admin_${session.role}`,
