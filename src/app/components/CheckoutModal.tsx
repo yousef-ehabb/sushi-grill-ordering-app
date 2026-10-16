@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { X, CheckCircle2, Truck, Store, MapPin, Phone, User, Loader2, ArrowLeft, UserCheck, AlertTriangle } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { clsx } from 'clsx';
+import { isProductAvailableInBranch, isBranchOpen } from '../utils/branchAvailability';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -34,6 +35,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
   const { cart, products, globalSettings, orderType, setOrderType, clearCart, submitOrder, loading } = useStore();
   const { user, isAuthenticated } = useAuthStore();
   const [step, setStep] = useState(1);
+  const [selectedBranch, setSelectedBranch] = useState<'فرع الاستاد' | 'فرع الكرفان' | ''>('');
   const [formData, setFormData] = useState({
     name: '',
     phone: '',
@@ -44,17 +46,38 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
   const isPhoneTouchedOrFilled = formData.phone.length > 0;
   const isPhoneInvalid = isPhoneTouchedOrFilled && !isValidPhone;
 
+  const isBranchValid = selectedBranch === 'فرع الاستاد' || selectedBranch === 'فرع الكرفان';
   const isNameValid = formData.name.trim().length > 0;
   const isAddressValid = orderType === 'delivery' ? formData.address.trim().length > 0 : true;
-  const isFormValid = isNameValid && isValidPhone && isAddressValid;
+  const isFormValid = isNameValid && isValidPhone && isAddressValid && isBranchValid;
 
   const isWebsiteClosed = globalSettings && !globalSettings.is_website_open;
+
+  // Branch status check
+  const isSelectedBranchOpen = selectedBranch ? isBranchOpen(globalSettings, selectedBranch) : true;
+  const branchClosedMessage = selectedBranch && globalSettings?.branches?.[selectedBranch]?.closed_message
+    ? globalSettings.branches[selectedBranch].closed_message
+    : `${selectedBranch} مغلق حالياً، نسعد باستقبال طلباتكم في أوقات العمل القادمة.`;
+
+  // Branch items availability check
+  const unavailableInSelectedBranch = useMemo(() => {
+    if (!selectedBranch) return [];
+    return cart.filter((item) => {
+      const p = products.find((prod) => prod.id === item.id);
+      if (!p) return !item.is_available;
+      return !isProductAvailableInBranch(p, selectedBranch);
+    });
+  }, [cart, products, selectedBranch]);
+
+  const hasBranchUnavailableItems = unavailableInSelectedBranch.length > 0;
+  const unavailableItemNames = unavailableInSelectedBranch.map((i) => i.name_ar).join('، ');
+
   const unavailableCartItems = cart.filter(item => {
     const p = products.find(prod => prod.id === item.id);
     return (p && !p.is_available) || !item.is_available;
   });
   const hasUnavailableItems = unavailableCartItems.length > 0;
-  const isSubmitDisabled = loading || !orderType || !!isWebsiteClosed || hasUnavailableItems || cart.length === 0 || !isFormValid;
+  const isSubmitDisabled = loading || !orderType || !isBranchValid || !isSelectedBranchOpen || hasBranchUnavailableItems || !!isWebsiteClosed || hasUnavailableItems || cart.length === 0 || !isFormValid;
 
   // Auto-close if cart becomes empty in real-time (e.g. item removed)
   useEffect(() => {
@@ -79,6 +102,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
     if (!isOpen) {
       setStep(1);
       setFormData({ name: '', phone: '', address: '' });
+      setSelectedBranch('');
     }
   }, [isOpen]);
 
@@ -89,9 +113,22 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSubmitDisabled || !isValidPhone) {
+    if (isSubmitDisabled || !isValidPhone || !isBranchValid || !isSelectedBranchOpen || hasBranchUnavailableItems) {
+      if (!isBranchValid) {
+        toast.error('يرجى اختيار الفرع (فرع الاستاد أو فرع الكرفان)');
+        return;
+      }
+      if (!isSelectedBranchOpen) {
+        toast.error(`${selectedBranch} مغلق حالياً`);
+        return;
+      }
+      if (hasBranchUnavailableItems) {
+        toast.error(`الصنف "${unavailableItemNames}" غير متاح حالياً في ${selectedBranch}`);
+        return;
+      }
       if (!isValidPhone) {
         toast.error('يرجى إدخال رقم هاتف صحيح مكون من 11 رقم يبدأ بـ 01');
+        return;
       }
       return;
     }
@@ -102,6 +139,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
       address: orderType === 'delivery' ? formData.address : undefined,
       user_id: isAuthenticated && user ? user.id : undefined,
       type: orderType || 'pickup',
+      branch: selectedBranch,
       items: [...cart],
       total,
     });
@@ -183,7 +221,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
                         </div>
                         <span className={`font-bold text-xs sm:text-sm ${orderType === 'pickup' ? 'text-primary' : 'text-slate-600'}`}>استلام من المطعم</span>
                         {orderType === 'pickup' && (
-                          <motion.div layoutId="check" className="absolute top-2.5 right-2.5 text-primary">
+                          <motion.div layoutId="check-order-type" className="absolute top-2.5 right-2.5 text-primary">
                             <CheckCircle2 className="w-4 h-4 sm:w-5 sm:h-5 fill-red-50" />
                           </motion.div>
                         )}
@@ -202,11 +240,87 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
                         </div>
                         <span className={`font-bold text-xs sm:text-sm ${orderType === 'delivery' ? 'text-primary' : 'text-slate-600'}`}>توصيل للمنزل</span>
                         {orderType === 'delivery' && (
-                          <motion.div layoutId="check" className="absolute top-2.5 right-2.5 text-primary">
+                          <motion.div layoutId="check-order-type" className="absolute top-2.5 right-2.5 text-primary">
                             <CheckCircle2 className="w-4 h-4 sm:w-5 sm:h-5 fill-red-50" />
                           </motion.div>
                         )}
                       </button>
+                    </div>
+
+                    {/* Branch Selection */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs sm:text-sm font-bold text-slate-700 flex items-center gap-1.5">
+                          <MapPin className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-400" />
+                          اختر الفرع
+                        </label>
+                        {!isBranchValid && (
+                          <span className="text-[11px] text-red-500 font-medium">مطلوب</span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 sm:gap-4">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedBranch('فرع الاستاد')}
+                          className={`relative overflow-hidden p-3 sm:p-4 rounded-xl sm:rounded-2xl flex flex-col items-center gap-2 sm:gap-3 transition-all duration-200 cursor-pointer ${selectedBranch === 'فرع الاستاد'
+                            ? 'bg-white ring-2 ring-primary shadow-md shadow-red-100'
+                            : 'bg-white border border-slate-200 text-slate-400 hover:border-slate-300 hover:bg-slate-50'
+                            }`}
+                        >
+                          <div className={`p-2.5 sm:p-3 rounded-full ${selectedBranch === 'فرع الاستاد' ? 'bg-red-50 text-primary' : 'bg-slate-100 text-slate-400'}`}>
+                            <Store className="w-5 h-5 sm:w-6 sm:h-6" />
+                          </div>
+                          <span className={`font-bold text-xs sm:text-sm ${selectedBranch === 'فرع الاستاد' ? 'text-primary' : 'text-slate-600'}`}>فرع الاستاد</span>
+                          {selectedBranch === 'فرع الاستاد' && (
+                            <motion.div layoutId="check-branch" className="absolute top-2.5 right-2.5 text-primary">
+                              <CheckCircle2 className="w-4 h-4 sm:w-5 sm:h-5 fill-red-50" />
+                            </motion.div>
+                          )}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setSelectedBranch('فرع الكرفان')}
+                          className={`relative overflow-hidden p-3 sm:p-4 rounded-xl sm:rounded-2xl flex flex-col items-center gap-2 sm:gap-3 transition-all duration-200 cursor-pointer ${selectedBranch === 'فرع الكرفان'
+                            ? 'bg-white ring-2 ring-primary shadow-md shadow-red-100'
+                            : 'bg-white border border-slate-200 text-slate-400 hover:border-slate-300 hover:bg-slate-50'
+                            }`}
+                        >
+                          <div className={`p-2.5 sm:p-3 rounded-full ${selectedBranch === 'فرع الكرفان' ? 'bg-red-50 text-primary' : 'bg-slate-100 text-slate-400'}`}>
+                            <Truck className="w-5 h-5 sm:w-6 sm:h-6" />
+                          </div>
+                          <span className={`font-bold text-xs sm:text-sm ${selectedBranch === 'فرع الكرفان' ? 'text-primary' : 'text-slate-600'}`}>فرع الكرفان</span>
+                          {selectedBranch === 'فرع الكرفان' && (
+                            <motion.div layoutId="check-branch" className="absolute top-2.5 right-2.5 text-primary">
+                              <CheckCircle2 className="w-4 h-4 sm:w-5 sm:h-5 fill-red-50" />
+                            </motion.div>
+                          )}
+                        </button>
+                      </div>
+
+                      {/* Branch Closed Warning */}
+                      {selectedBranch && !isSelectedBranchOpen && (
+                        <div className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs shadow-xs animate-in fade-in duration-200">
+                          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                          <div className="space-y-0.5">
+                            <p className="font-bold text-amber-900">{selectedBranch} مغلق حالياً</p>
+                            <p className="text-amber-700 leading-relaxed">{branchClosedMessage}</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Branch Unavailable Items Warning */}
+                      {selectedBranch && isSelectedBranchOpen && hasBranchUnavailableItems && (
+                        <div className="flex items-start gap-2.5 p-3 rounded-xl bg-red-50 border border-red-200 text-red-900 text-xs shadow-xs animate-in fade-in duration-200">
+                          <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                          <div className="space-y-0.5">
+                            <p className="font-bold text-red-900">أصناف غير متوفرة في {selectedBranch}</p>
+                            <p className="text-red-700 leading-relaxed">
+                              عذراً، الصنف <span className="font-black text-red-900 underline underline-offset-2">{unavailableItemNames}</span> غير متاح حالياً في <span className="font-black text-red-900">{selectedBranch}</span>. يرجى اختيار الفرع الآخر أو تعديل السلة.
+                            </p>
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     {/* Customer Details */}

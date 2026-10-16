@@ -39,6 +39,7 @@ export type Product = {
   price: number;
   image_url: string;
   is_available: boolean;
+  branch_availability?: Record<string, boolean>;
   is_best_seller?: boolean;
   is_chef_pick?: boolean;
   badge?: string;
@@ -52,6 +53,7 @@ export type ProductOption = {
   name_ar: string;
   price_delta: number;
   is_active: boolean;
+  branch_availability?: Record<string, boolean>;
   sort_order: number;
 };
 
@@ -84,6 +86,7 @@ export type Order = {
   address?: string;
   user_id?: string;
   type: 'pickup' | 'delivery';
+  branch?: string;
   items: OrderItem[];
   total: number;
   status: OrderStatus;
@@ -100,10 +103,21 @@ export type OrderItem = {
   selected_option_ids?: string[];
 };
 
+export type BranchOperationalStatus = {
+  is_open: boolean;
+  closed_message: string;
+};
+
 export type GlobalSettings = {
   id: string;
   is_website_open: boolean;
   closed_message: string;
+  branches?: {
+    'فرع الاستاد'?: BranchOperationalStatus;
+    'فرع الكرفان'?: BranchOperationalStatus;
+    [branchName: string]: BranchOperationalStatus | undefined;
+  };
+  created_at?: string;
   updated_at?: string;
 };
 
@@ -174,9 +188,11 @@ interface AppState {
   deleteOption: (optionId: string) => Promise<void>;
 
   // Operational Control Actions
-  updateGlobalSettings: (data: Partial<Pick<GlobalSettings, 'is_website_open' | 'closed_message'>>) => Promise<void>;
+  updateGlobalSettings: (data: Partial<Pick<GlobalSettings, 'is_website_open' | 'closed_message' | 'branches'>>) => Promise<void>;
+  updateBranchStatus: (branch: string, status: Partial<BranchOperationalStatus>) => Promise<void>;
   toggleCategoryActive: (categoryId: string) => Promise<void>;
   updateBusinessRule: (categoryId: string, minQuantity: number) => Promise<void>;
+  toggleProductBranchAvailability: (productId: string, branch: string) => Promise<void>;
 }
 
 export const useStore = create<AppState>()(
@@ -521,6 +537,7 @@ export const useStore = create<AppState>()(
             address: orderData.address,
             user_id: orderData.user_id,
             type: orderData.type,
+            branch: orderData.branch,
             total: clientComputedTotal,
             status: 'new',
             items: orderData.items.map((item) => ({
@@ -708,6 +725,43 @@ export const useStore = create<AppState>()(
           console.error('Failed to update global settings:', error);
           set({ globalSettings: current }); // Rollback
         }
+      },
+
+      updateBranchStatus: async (branch, status) => {
+        const current = get().globalSettings;
+        if (!current) return;
+
+        const existingBranch = current.branches?.[branch] || {
+          is_open: true,
+          closed_message: `${branch} مغلق حالياً، نسعد باستقبال طلباتكم في أوقات العمل القادمة.`,
+        };
+
+        const updatedBranches = {
+          ...(current.branches || {}),
+          [branch]: {
+            ...existingBranch,
+            ...status,
+          },
+        };
+
+        await get().updateGlobalSettings({ branches: updatedBranches });
+      },
+
+      toggleProductBranchAvailability: async (productId, branch) => {
+        const product = get().products.find(p => p.id === productId);
+        if (!product) return;
+
+        // Current branch availability: if undefined, it inherits base is_available
+        const isCurrentBranchAvailable = product.branch_availability?.[branch] !== undefined
+          ? product.branch_availability[branch]
+          : product.is_available;
+
+        const nextBranchMap = {
+          ...(product.branch_availability || {}),
+          [branch]: !isCurrentBranchAvailable,
+        };
+
+        await get().updateProduct(productId, { branch_availability: nextBranchMap });
       },
 
       toggleCategoryActive: async (categoryId) => {

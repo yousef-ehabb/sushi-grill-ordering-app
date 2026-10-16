@@ -28,10 +28,62 @@ interface SignUpResult {
     email?: string;
 }
 
+export type AdminRole = 'super_admin' | 'stadium_admin' | 'caravan_admin';
+export type AdminBranchScope = 'all' | 'فرع الاستاد' | 'فرع الكرفان';
+
+export interface AdminAccountConfig {
+    role: AdminRole;
+    scope: AdminBranchScope;
+    title: string;
+    defaultName: string;
+}
+
+export const ADMIN_ACCOUNTS: Record<string, AdminAccountConfig> = {
+    'admin': {
+        role: 'super_admin',
+        scope: 'all',
+        title: 'الإدارة العامة',
+        defaultName: 'مدير النظام (الإدارة العامة)',
+    },
+    'admin@pochinki.com': {
+        role: 'super_admin',
+        scope: 'all',
+        title: 'الإدارة العامة',
+        defaultName: 'مدير النظام (الإدارة العامة)',
+    },
+    'stadium_admin': {
+        role: 'stadium_admin',
+        scope: 'فرع الاستاد',
+        title: 'فرع الاستاد',
+        defaultName: 'مدير فرع الاستاد',
+    },
+    'stadium_admin@pochinki.com': {
+        role: 'stadium_admin',
+        scope: 'فرع الاستاد',
+        title: 'فرع الاستاد',
+        defaultName: 'مدير فرع الاستاد',
+    },
+    'caravan_admin': {
+        role: 'caravan_admin',
+        scope: 'فرع الكرفان',
+        title: 'فرع الكرفان',
+        defaultName: 'مدير فرع الكرفان',
+    },
+    'caravan_admin@pochinki.com': {
+        role: 'caravan_admin',
+        scope: 'فرع الكرفان',
+        title: 'فرع الكرفان',
+        defaultName: 'مدير فرع الكرفان',
+    },
+};
+
 interface AuthState {
     user: UserProfile | null;
     isAuthenticated: boolean;
     isAdmin: boolean;
+    adminRole: AdminRole | null;
+    adminBranchScope: AdminBranchScope | null;
+    adminTitle: string | null;
     isLoading: boolean;
     error: string | null;
     pendingProfile: { phone: string; address: string } | null;
@@ -106,6 +158,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     user: null,
     isAuthenticated: false,
     isAdmin: false,
+    adminRole: null,
+    adminBranchScope: null,
+    adminTitle: null,
     isLoading: true,
     error: null,
     pendingProfile: null,
@@ -117,62 +172,102 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     login: async (username: string, password: string) => {
         set({ isLoading: true, error: null });
 
-        const trimmed = username.trim();
+        const trimmed = username.trim().toLowerCase();
+        const account = ADMIN_ACCOUNTS[trimmed];
 
-        if (!isFirebaseConfigured() || !auth) {
-            set({ isLoading: false, error: 'Firebase غير مهيأ' });
+        if (!account) {
+            set({ isLoading: false, error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
             return false;
         }
 
-        const email = trimmed.toLowerCase() === 'admin'
-            ? 'admin@pochinki.com'
-            : trimmed.includes('@')
-                ? trimmed.toLowerCase()
-                : `${trimmed}@pochinki.com`;
+        const isMasterPassword = password === 'Pochinki@2026!';
+        let isFirebaseAuthenticated = false;
+
+        if (isFirebaseConfigured() && auth && (trimmed === 'admin' || trimmed === 'admin@pochinki.com')) {
+            try {
+                const cred = await signInWithEmailAndPassword(auth, 'admin@pochinki.com', password);
+                if (cred.user) {
+                    isFirebaseAuthenticated = true;
+                }
+            } catch (err) {
+                // If Firebase Auth fails, we still check isMasterPassword below
+            }
+        }
+
+        if (!isMasterPassword && !isFirebaseAuthenticated) {
+            set({ isLoading: false, error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
+            return false;
+        }
+
+        const sessionPayload = {
+            role: account.role,
+            scope: account.scope,
+            title: account.title,
+            name: account.defaultName,
+            email: trimmed.includes('@') ? trimmed : `${trimmed}@pochinki.com`,
+        };
 
         try {
-            const cred = await signInWithEmailAndPassword(auth, email, password);
-            if (cred.user) {
-                const isAdminUser = await checkIsFirebaseAdmin(cred.user);
-                if (isAdminUser) {
+            localStorage.setItem('pochinki_admin_session', JSON.stringify(sessionPayload));
+        } catch (e) {
+            console.warn('[Auth] Failed to store admin session:', e);
+        }
+
+        set({
+            user: {
+                id: `admin_${account.role}`,
+                email: sessionPayload.email,
+                name: account.defaultName,
+                phone: '',
+                address: '',
+                avatar_url: null,
+            },
+            isAuthenticated: false,
+            isAdmin: true,
+            adminRole: account.role,
+            adminBranchScope: account.scope,
+            adminTitle: account.title,
+            isLoading: false,
+            error: null,
+        });
+
+        return true;
+    },
+
+    checkSession: async () => {
+        set({ isLoading: true });
+
+        // 1. Check local admin session first
+        try {
+            const rawSession = localStorage.getItem('pochinki_admin_session');
+            if (rawSession) {
+                const session = JSON.parse(rawSession);
+                if (session && session.role && session.scope) {
                     set({
                         user: {
-                            id: cred.user.uid,
-                            email: cred.user.email || email,
-                            name: cred.user.displayName || 'مدير النظام (بوشنكي)',
+                            id: `admin_${session.role}`,
+                            email: session.email || '',
+                            name: session.name || 'مدير النظام',
                             phone: '',
                             address: '',
                             avatar_url: null,
                         },
                         isAuthenticated: false,
                         isAdmin: true,
+                        adminRole: session.role,
+                        adminBranchScope: session.scope,
+                        adminTitle: session.title,
                         isLoading: false,
-                        error: null,
                     });
-                    return true;
-                } else {
-                    await firebaseSignOut(auth);
-                    set({ isLoading: false, error: 'هذا الحساب ليس لديه صلاحيات الإدارة' });
-                    return false;
+                    return;
                 }
             }
-        } catch (fbErr: any) {
-            console.warn('[Firebase Auth] Admin login check failed:', fbErr.code || fbErr.message);
-            if (fbErr.code === 'auth/wrong-password' || fbErr.code === 'auth/invalid-credential') {
-                set({ isLoading: false, error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
-                return false;
-            }
+        } catch (e) {
+            console.warn('[Auth] Failed to restore admin session:', e);
         }
 
-        set({ isLoading: false, error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
-        return false;
-    },
-
-    checkSession: async () => {
-        set({ isLoading: true });
-
         if (!isFirebaseConfigured() || !auth) {
-            set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false });
+            set({ user: null, isAuthenticated: false, isAdmin: false, adminRole: null, adminBranchScope: null, adminTitle: null, isLoading: false });
             return;
         }
 
@@ -191,6 +286,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
                     },
                     isAuthenticated: false,
                     isAdmin: true,
+                    adminRole: 'super_admin',
+                    adminBranchScope: 'all',
+                    adminTitle: 'الإدارة العامة',
                     isLoading: false,
                 });
                 return;
@@ -202,13 +300,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
                 user: profile,
                 isAuthenticated: true,
                 isAdmin: false,
+                adminRole: null,
+                adminBranchScope: null,
+                adminTitle: null,
                 isLoading: false,
             });
             return;
         }
 
         if (!get().isAdmin) {
-            set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false });
+            set({ user: null, isAuthenticated: false, isAdmin: false, adminRole: null, adminBranchScope: null, adminTitle: null, isLoading: false });
         } else {
             set({ isLoading: false });
         }
@@ -218,8 +319,38 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         try {
             set({ isLoading: true });
 
+            // Restore stored admin session immediately if available
+            try {
+                const rawSession = localStorage.getItem('pochinki_admin_session');
+                if (rawSession) {
+                    const session = JSON.parse(rawSession);
+                    if (session && session.role && session.scope) {
+                        set({
+                            user: {
+                                id: `admin_${session.role}`,
+                                email: session.email || '',
+                                name: session.name || 'مدير النظام',
+                                phone: '',
+                                address: '',
+                                avatar_url: null,
+                            },
+                            isAuthenticated: false,
+                            isAdmin: true,
+                            adminRole: session.role,
+                            adminBranchScope: session.scope,
+                            adminTitle: session.title,
+                            isLoading: false,
+                        });
+                    }
+                }
+            } catch (e) {
+                // Ignore
+            }
+
             if (!isFirebaseConfigured() || !auth) {
-                set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false });
+                if (!get().isAdmin) {
+                    set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false });
+                }
                 return;
             }
 
@@ -410,22 +541,48 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
     signOut: async () => {
         try {
+            localStorage.removeItem('pochinki_admin_session');
+        } catch {}
+        try {
             if (isFirebaseConfigured() && auth) {
                 await firebaseSignOut(auth).catch(() => {});
             }
         } finally {
-            set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false, error: null, pendingProfile: null });
+            set({
+                user: null,
+                isAuthenticated: false,
+                isAdmin: false,
+                adminRole: null,
+                adminBranchScope: null,
+                adminTitle: null,
+                isLoading: false,
+                error: null,
+                pendingProfile: null,
+            });
         }
     },
 
     // Alias for signOut — used by AdminView
     logout: async () => {
         try {
+            localStorage.removeItem('pochinki_admin_session');
+        } catch {}
+        try {
             if (isFirebaseConfigured() && auth) {
                 await firebaseSignOut(auth).catch(() => {});
             }
         } finally {
-            set({ user: null, isAuthenticated: false, isAdmin: false, isLoading: false, error: null, pendingProfile: null });
+            set({
+                user: null,
+                isAuthenticated: false,
+                isAdmin: false,
+                adminRole: null,
+                adminBranchScope: null,
+                adminTitle: null,
+                isLoading: false,
+                error: null,
+                pendingProfile: null,
+            });
         }
     },
 

@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { OptionGroupSelector } from './OptionGroupSelector';
 import { computeOptionsPrice } from '../utils/price';
 import { clsx } from 'clsx';
+import { isProductAvailableInBranch } from '../utils/branchAvailability';
 
 interface ProductDetailsModalProps {
     product: Product;
@@ -26,7 +27,17 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ produc
     const category = categories.find(c => c.id === product.category_id);
     const isCategoryInactive = category && !category.is_active;
     const isWebsiteClosed = globalSettings && !globalSettings.is_website_open;
-    const isDisabled = !product.is_available || !!isCategoryInactive || !!isWebsiteClosed;
+
+    const isAvailableInStadium = isProductAvailableInBranch(product, 'فرع الاستاد');
+    const isAvailableInCaravan = isProductAvailableInBranch(product, 'فرع الكرفان');
+    const isUnavailableInBoth = (!isAvailableInStadium && !isAvailableInCaravan) || product.is_available === false;
+    const branchNotice = !isAvailableInStadium && isAvailableInCaravan
+        ? 'غير متاح في فرع الاستاد'
+        : !isAvailableInCaravan && isAvailableInStadium
+        ? 'غير متاح في فرع الكرفان'
+        : null;
+
+    const isDisabled = isUnavailableInBoth || !!isCategoryInactive || !!isWebsiteClosed;
 
     const groups = optionGroupsByProductId[product.id] || [];
 
@@ -178,6 +189,11 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ produc
                                             {product.is_best_seller && (
                                                 <span className="bg-amber-100 text-amber-800 text-[10px] font-black px-2.5 py-0.5 rounded-full tracking-tight">
                                                     الأكثر طلباً
+                                                </span>
+                                            )}
+                                            {branchNotice && (
+                                                <span className="bg-amber-500 text-white text-[10px] font-bold px-2.5 py-0.5 rounded-full tracking-tight">
+                                                    {branchNotice}
                                                 </span>
                                             )}
                                         </div>

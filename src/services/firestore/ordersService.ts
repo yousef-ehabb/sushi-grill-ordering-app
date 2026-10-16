@@ -41,6 +41,7 @@ export const ordersService = {
         address: orderData.address?.trim() || '',
         user_id: orderData.user_id || null,
         type: orderData.type || 'pickup',
+        branch: orderData.branch?.trim() || '',
         total: Number(orderData.total) || 0,
         status: 'new' as OrderStatus,
         created_at: new Date().toISOString(),

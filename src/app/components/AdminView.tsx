@@ -37,6 +37,7 @@ import {
   ChevronDown,
   ChevronUp,
   Truck,
+  Store,
   Maximize2,
   Minimize2
 } from 'lucide-react';
@@ -44,6 +45,7 @@ import { resolveAllOptionNames } from '../utils/optionNames';
 import { clsx } from 'clsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { Toaster, toast } from 'sonner';
+import { isProductAvailableInBranch, isBranchOpen } from '../utils/branchAvailability';
 
 export const AdminView: React.FC = () => {
   const {
@@ -52,9 +54,10 @@ export const AdminView: React.FC = () => {
     updateOrderStatus, fetchOrders, fetchProducts, fetchCategories,
     fetchGlobalSettings, fetchBusinessRules, fetchAllOptionGroups,
     updateProduct, updateGlobalSettings, updateBusinessRule,
-    toggleOptionActive, createOption, updateOption, deleteOption
+    toggleOptionActive, createOption, updateOption, deleteOption,
+    toggleProductBranchAvailability, updateBranchStatus
   } = useStore();
-  const { signOut } = useAuthStore();
+  const { signOut, adminRole, adminBranchScope, adminTitle } = useAuthStore();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'orders' | 'menu' | 'controls' | 'analytics'>('orders');
   const [optionNames, setOptionNames] = useState<Map<string, string>>(new Map());
@@ -65,7 +68,14 @@ export const AdminView: React.FC = () => {
 
   // Orders section filter & collapsible state
   const [orderStatusFilter, setOrderStatusFilter] = useState<'all' | OrderStatus>('all');
+  const [selectedBranchFilter, setSelectedBranchFilter] = useState<'all' | 'فرع الاستاد' | 'فرع الكرفان'>('all');
   const [collapsedOrderIds, setCollapsedOrderIds] = useState<Set<string>>(new Set());
+
+  // Branch-Scoped Orders based on logged-in admin
+  const branchScopedOrders = useMemo(() => {
+    if (adminBranchScope === 'all') return orders;
+    return orders.filter(o => o.branch === adminBranchScope);
+  }, [orders, adminBranchScope]);
 
   const toggleOrderCollapse = (orderId: string) => {
     setCollapsedOrderIds(prev => {
@@ -80,7 +90,7 @@ export const AdminView: React.FC = () => {
   };
 
   const collapseAllCompleted = () => {
-    const completedIds = orders.filter(o => o.status === 'completed').map(o => o.id);
+    const completedIds = branchScopedOrders.filter(o => o.status === 'completed').map(o => o.id);
     setCollapsedOrderIds(prev => new Set([...prev, ...completedIds]));
   };
 
@@ -90,7 +100,7 @@ export const AdminView: React.FC = () => {
 
   const orderCounts = useMemo(() => {
     const counts: Record<string, number> = {
-      all: orders.length,
+      all: branchScopedOrders.length,
       new: 0,
       preparing: 0,
       ready: 0,
@@ -98,21 +108,36 @@ export const AdminView: React.FC = () => {
       completed: 0,
       cancelled: 0,
     };
-    orders.forEach(o => {
+    branchScopedOrders.forEach(o => {
       if (counts[o.status] !== undefined) {
         counts[o.status]++;
       }
     });
     return counts;
+  }, [branchScopedOrders]);
+
+  const branchCounts = useMemo(() => {
+    return {
+      all: orders.length,
+      stadium: orders.filter(o => o.branch === 'فرع الاستاد').length,
+      caravan: orders.filter(o => o.branch === 'فرع الكرفان').length,
+    };
   }, [orders]);
 
   const filteredOrders = useMemo(() => {
-    if (orderStatusFilter === 'all') return orders;
-    return orders.filter(o => o.status === orderStatusFilter);
-  }, [orders, orderStatusFilter]);
+    return branchScopedOrders.filter(o => {
+      const matchesStatus = orderStatusFilter === 'all' || o.status === orderStatusFilter;
+      const matchesBranch = adminBranchScope !== 'all'
+        ? true
+        : (selectedBranchFilter === 'all' || o.branch === selectedBranchFilter);
+      return matchesStatus && matchesBranch;
+    });
+  }, [branchScopedOrders, orderStatusFilter, selectedBranchFilter, adminBranchScope]);
 
   // Local state for controls form
   const [localClosedMessage, setLocalClosedMessage] = useState('');
+  const [localStadiumClosedMessage, setLocalStadiumClosedMessage] = useState('');
+  const [localCaravanClosedMessage, setLocalCaravanClosedMessage] = useState('');
   const [localMinQty, setLocalMinQty] = useState<Record<string, number>>({});
   const [isSaving, setIsSaving] = useState(false);
 
@@ -157,7 +182,15 @@ export const AdminView: React.FC = () => {
   // Sync local state when global data loads
   useEffect(() => {
     if (globalSettings) {
-      setLocalClosedMessage(globalSettings.closed_message);
+      setLocalClosedMessage(globalSettings.closed_message || '');
+      setLocalStadiumClosedMessage(
+        globalSettings.branches?.['فرع الاستاد']?.closed_message ||
+        'فرع الاستاد مغلق حالياً، نسعد باستقبال طلباتكم في أوقات العمل القادمة.'
+      );
+      setLocalCaravanClosedMessage(
+        globalSettings.branches?.['فرع الكرفان']?.closed_message ||
+        'فرع الكرفان مغلق حالياً، نسعد باستقبال طلباتكم في أوقات العمل القادمة.'
+      );
     }
   }, [globalSettings]);
 
@@ -169,10 +202,10 @@ export const AdminView: React.FC = () => {
     setLocalMinQty(map);
   }, [businessRules]);
 
-  // Analytics computations
+  // Analytics computations (Strictly scoped to branch when in branch admin)
   const validOrders = useMemo(() => {
-    return orders.filter(order => order.status !== 'cancelled');
-  }, [orders]);
+    return branchScopedOrders.filter(order => order.status !== 'cancelled');
+  }, [branchScopedOrders]);
 
   const todayStats = useMemo(() => {
     const now = new Date();
@@ -208,6 +241,25 @@ export const AdminView: React.FC = () => {
     }
 
     return { revenue, count };
+  }, [validOrders]);
+
+  const branchAnalytics = useMemo(() => {
+    let stadiumRev = 0;
+    let stadiumCount = 0;
+    let caravanRev = 0;
+    let caravanCount = 0;
+
+    for (const order of validOrders) {
+      if (order.branch === 'فرع الاستاد') {
+        stadiumRev += (order.total || 0);
+        stadiumCount += 1;
+      } else if (order.branch === 'فرع الكرفان') {
+        caravanRev += (order.total || 0);
+        caravanCount += 1;
+      }
+    }
+
+    return { stadiumRev, stadiumCount, caravanRev, caravanCount };
   }, [validOrders]);
 
   const productSales = useMemo(() => {
@@ -427,21 +479,39 @@ export const AdminView: React.FC = () => {
     toast.success(globalSettings.is_website_open ? 'تم إغلاق الموقع' : 'تم فتح الموقع');
   };
 
+  const handleToggleBranch = async (branchName: 'فرع الاستاد' | 'فرع الكرفان') => {
+    if (!globalSettings) return;
+    const branchData = globalSettings.branches?.[branchName] || { is_open: true, closed_message: '' };
+    const nextIsOpen = !branchData.is_open;
+    await updateBranchStatus(branchName, { is_open: nextIsOpen });
+    toast.success(nextIsOpen ? `تم فتح ${branchName}` : `تم إغلاق ${branchName}`);
+  };
+
   const handleSaveControls = async () => {
     setIsSaving(true);
     try {
-      // Save closed message
-      if (globalSettings && localClosedMessage !== globalSettings.closed_message) {
-        await updateGlobalSettings({ closed_message: localClosedMessage });
-      }
-      // Save all min quantity rules
-      for (const [catId, qty] of Object.entries(localMinQty)) {
-        const existing = businessRules.find(r => r.category_id === catId);
-        if (!existing || existing.min_quantity !== qty) {
-          await updateBusinessRule(catId, qty);
+      if (adminBranchScope === 'فرع الاستاد') {
+        await updateBranchStatus('فرع الاستاد', { closed_message: localStadiumClosedMessage });
+        toast.success('تم حفظ إعدادات فرع الاستاد بنجاح');
+      } else if (adminBranchScope === 'فرع الكرفان') {
+        await updateBranchStatus('فرع الكرفان', { closed_message: localCaravanClosedMessage });
+        toast.success('تم حفظ إعدادات فرع الكرفان بنجاح');
+      } else {
+        // Super Admin saves global + both branches + min quantity rules
+        if (globalSettings && localClosedMessage !== globalSettings.closed_message) {
+          await updateGlobalSettings({ closed_message: localClosedMessage });
         }
+        await updateBranchStatus('فرع الاستاد', { closed_message: localStadiumClosedMessage });
+        await updateBranchStatus('فرع الكرفان', { closed_message: localCaravanClosedMessage });
+
+        for (const [catId, qty] of Object.entries(localMinQty)) {
+          const existing = businessRules.find(r => r.category_id === catId);
+          if (!existing || existing.min_quantity !== qty) {
+            await updateBusinessRule(catId, qty);
+          }
+        }
+        toast.success('تم حفظ جميع الإعدادات بنجاح');
       }
-      toast.success('تم حفظ جميع الإعدادات بنجاح');
     } catch {
       toast.error('حدث خطأ أثناء الحفظ');
     }
@@ -475,10 +545,22 @@ export const AdminView: React.FC = () => {
       <div className="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 flex items-center justify-between h-16">
           <div className="flex items-center gap-4 lg:gap-6 overflow-x-auto">
-            <h1 className="text-xl font-black text-slate-900 flex items-center gap-2 shrink-0">
-              <LayoutDashboard className="w-5 h-5 text-primary" />
-              لوحة الإدارة
-            </h1>
+            <div className="flex items-center gap-2.5 shrink-0">
+              <h1 className="text-xl font-black text-slate-900 flex items-center gap-2">
+                <LayoutDashboard className="w-5 h-5 text-primary" />
+                لوحة الإدارة
+              </h1>
+              <span className={clsx(
+                "px-2.5 py-1 rounded-full text-xs font-bold border transition-all whitespace-nowrap",
+                adminBranchScope === 'فرع الاستاد'
+                  ? "bg-amber-50 text-amber-800 border-amber-200"
+                  : adminBranchScope === 'فرع الكرفان'
+                  ? "bg-teal-50 text-teal-800 border-teal-200"
+                  : "bg-red-50 text-primary border-red-200"
+              )}>
+                {adminTitle || (adminBranchScope === 'all' ? 'الإدارة العامة' : adminBranchScope)}
+              </span>
+            </div>
             <nav className="flex gap-2 lg:gap-4">
               <button
                 onClick={() => setActiveTab('orders')}
@@ -487,7 +569,7 @@ export const AdminView: React.FC = () => {
                   activeTab === 'orders' ? "bg-red-50 text-primary" : "text-slate-500 hover:bg-slate-50"
                 )}
               >
-                الطلبات ({orders.length})
+                الطلبات ({branchScopedOrders.length})
               </button>
               <button
                 onClick={() => setActiveTab('menu')}
@@ -554,10 +636,12 @@ export const AdminView: React.FC = () => {
                 <h2 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
                   <span>الطلبات الواردة</span>
                   <span className="text-xs bg-red-50 text-primary border border-red-100 font-bold px-2.5 py-0.5 rounded-full">
-                    {orders.length} {orders.length === 1 ? 'طلب' : 'طلبات'}
+                    {branchScopedOrders.length} {branchScopedOrders.length === 1 ? 'طلب' : 'طلبات'}
                   </span>
                 </h2>
-                <p className="text-slate-500 text-xs mt-0.5">متابعة وإدارة حالات الطلبات الحية لحظياً</p>
+                <p className="text-slate-500 text-xs mt-0.5">
+                  {adminBranchScope !== 'all' ? `متابعة وإدارة طلبات ${adminBranchScope} الحية لحظياً` : 'متابعة وإدارة حالات الطلبات الحية لحظياً لكافة الفروع'}
+                </p>
               </div>
 
               <div className="flex items-center gap-2">
@@ -571,10 +655,101 @@ export const AdminView: React.FC = () => {
               </div>
             </div>
 
-            {/* Quick Status Filter Bar & Collapse Action */}
-            <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-2.5 sm:p-3 rounded-2xl border border-slate-100 shadow-sm">
-              {/* Filter Pills */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 w-full lg:w-auto scrollbar-none">
+            {/* Quick Status & Branch Filter Bar */}
+            <div className="flex flex-col gap-2.5 bg-white p-2.5 sm:p-3 rounded-2xl border border-slate-100 shadow-sm">
+              {/* Branch Filter Row + Quick Actions */}
+              <div className="flex flex-wrap items-center justify-between gap-2.5 pb-2 border-b border-slate-100">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-bold text-slate-500 flex items-center gap-1">
+                    <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                    <span>نطاق الفرع:</span>
+                  </span>
+                  {adminBranchScope === 'all' ? (
+                    <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs font-bold">
+                      <button
+                        onClick={() => setSelectedBranchFilter('all')}
+                        className={clsx(
+                          "px-3 py-1 rounded-lg transition-all text-xs flex items-center gap-1.5 cursor-pointer",
+                          selectedBranchFilter === 'all'
+                            ? "bg-white text-slate-900 shadow-xs"
+                            : "text-slate-500 hover:text-slate-800"
+                        )}
+                      >
+                        <span>كل الفروع</span>
+                        <span className="text-[10px] bg-slate-200/70 text-slate-600 px-1.5 py-0.2 rounded-full font-black">
+                          {branchCounts.all}
+                        </span>
+                      </button>
+                      <button
+                        onClick={() => setSelectedBranchFilter('فرع الاستاد')}
+                        className={clsx(
+                          "px-3 py-1 rounded-lg transition-all text-xs flex items-center gap-1.5 cursor-pointer",
+                          selectedBranchFilter === 'فرع الاستاد'
+                            ? "bg-white text-emerald-700 shadow-xs"
+                            : "text-slate-500 hover:text-slate-800"
+                        )}
+                      >
+                        <Store className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>فرع الاستاد</span>
+                        <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded-full font-black">
+                          {branchCounts.stadium}
+                        </span>
+                      </button>
+                      <button
+                        onClick={() => setSelectedBranchFilter('فرع الكرفان')}
+                        className={clsx(
+                          "px-3 py-1 rounded-lg transition-all text-xs flex items-center gap-1.5 cursor-pointer",
+                          selectedBranchFilter === 'فرع الكرفان'
+                            ? "bg-white text-amber-700 shadow-xs"
+                            : "text-slate-500 hover:text-slate-800"
+                        )}
+                      >
+                        <Truck className="w-3.5 h-3.5 text-amber-600" />
+                        <span>فرع الكرفان</span>
+                        <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded-full font-black">
+                          {branchCounts.caravan}
+                        </span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5 bg-slate-100 px-3 py-1.5 rounded-xl text-xs font-bold text-slate-800">
+                      {adminBranchScope === 'فرع الاستاد' ? (
+                        <Store className="w-3.5 h-3.5 text-emerald-600" />
+                      ) : (
+                        <Truck className="w-3.5 h-3.5 text-amber-600" />
+                      )}
+                      <span>{adminBranchScope}</span>
+                      <span className="text-[10px] bg-white text-slate-700 px-2 py-0.5 rounded-full font-black shadow-2xs">
+                        {branchScopedOrders.length} طلب
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Quick Actions (Collapse/Expand Completed) */}
+                {orderCounts.completed > 0 && (
+                  <button
+                    onClick={collapsedOrderIds.size > 0 ? expandAllOrders : collapseAllCompleted}
+                    className="flex items-center gap-1.5 text-slate-600 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 transition-all font-semibold text-xs cursor-pointer"
+                    title={collapsedOrderIds.size > 0 ? 'توسيع جميع الطلبات المطوية' : 'طي الطلبات المكتملة لتوفير المساحة'}
+                  >
+                    {collapsedOrderIds.size > 0 ? (
+                      <>
+                        <Maximize2 className="w-3.5 h-3.5" />
+                        <span>توسيع الكل ({collapsedOrderIds.size})</span>
+                      </>
+                    ) : (
+                      <>
+                        <Minimize2 className="w-3.5 h-3.5" />
+                        <span>طي الطلبات المكتملة</span>
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+
+              {/* Status Filter Pills */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 w-full scrollbar-none">
                 {[
                   { key: 'all' as const, label: 'الكل' },
                   { key: 'new' as const, label: 'جديد' },
@@ -595,7 +770,7 @@ export const AdminView: React.FC = () => {
                       key={tab.key}
                       onClick={() => setOrderStatusFilter(tab.key)}
                       className={clsx(
-                        "px-3 py-1.5 rounded-xl font-bold text-xs transition-all flex items-center gap-1.5 shrink-0 whitespace-nowrap",
+                        "px-3 py-1.5 rounded-xl font-bold text-xs transition-all flex items-center gap-1.5 shrink-0 whitespace-nowrap cursor-pointer",
                         isActive
                           ? "bg-red-50 text-primary border border-red-200 shadow-xs"
                           : "text-slate-600 hover:bg-slate-50 border border-transparent"
@@ -613,29 +788,6 @@ export const AdminView: React.FC = () => {
                     </button>
                   );
                 })}
-              </div>
-
-              {/* Quick Actions (Collapse/Expand Completed) */}
-              <div className="flex items-center gap-2 mr-auto lg:mr-0 text-xs">
-                {orderCounts.completed > 0 && (
-                  <button
-                    onClick={collapsedOrderIds.size > 0 ? expandAllOrders : collapseAllCompleted}
-                    className="flex items-center gap-1.5 text-slate-600 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 transition-all font-semibold text-xs"
-                    title={collapsedOrderIds.size > 0 ? 'توسيع جميع الطلبات المطوية' : 'طي الطلبات المكتملة لتوفير المساحة'}
-                  >
-                    {collapsedOrderIds.size > 0 ? (
-                      <>
-                        <Maximize2 className="w-3.5 h-3.5" />
-                        <span>توسيع الكل ({collapsedOrderIds.size})</span>
-                      </>
-                    ) : (
-                      <>
-                        <Minimize2 className="w-3.5 h-3.5" />
-                        <span>طي الطلبات المكتملة</span>
-                      </>
-                    )}
-                  </button>
-                )}
               </div>
             </div>
 
@@ -675,6 +827,16 @@ export const AdminView: React.FC = () => {
                             <span className={clsx("px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0", statusColors[order.status])}>
                               {statusLabels[order.status]}
                             </span>
+                            {order.branch && (
+                              <span className={clsx(
+                                "px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 flex items-center gap-1",
+                                order.branch === 'فرع الكرفان'
+                                  ? "bg-amber-50 text-amber-700 border border-amber-200"
+                                  : "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                              )}>
+                                <span>{order.branch}</span>
+                              </span>
+                            )}
                             <span className="text-xs text-slate-700 font-bold truncate">
                               {order.customer_name}
                             </span>
@@ -694,7 +856,7 @@ export const AdminView: React.FC = () => {
                           </span>
                           <button
                             onClick={() => toggleOrderCollapse(order.id)}
-                            className="text-primary hover:underline text-[11px] font-bold"
+                            className="text-primary hover:underline text-[11px] font-bold cursor-pointer"
                           >
                             عرض التفاصيل
                           </button>
@@ -733,7 +895,7 @@ export const AdminView: React.FC = () => {
                             </span>
                             <button
                               onClick={() => toggleOrderCollapse(order.id)}
-                              className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-700 transition-all"
+                              className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-700 transition-all cursor-pointer"
                               title="طي تفاصيل الطلب"
                             >
                               <ChevronUp className="w-3.5 h-3.5" />
@@ -757,6 +919,17 @@ export const AdminView: React.FC = () => {
                                 <Phone className="w-3 h-3 text-slate-400" />
                                 {order.customer_phone}
                               </a>
+                              {order.branch && (
+                                <span className={clsx(
+                                  "px-2 py-0.5 rounded-md text-[10px] font-bold flex items-center gap-1",
+                                  order.branch === 'فرع الكرفان'
+                                    ? "bg-amber-50 text-amber-700 border border-amber-200"
+                                    : "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                )}>
+                                  <MapPin className="w-3 h-3" />
+                                  <span>{order.branch}</span>
+                                </span>
+                              )}
                               <span className={clsx(
                                 "px-2 py-0.5 rounded-md text-[10px] font-bold flex items-center gap-1",
                                 order.type === 'delivery'
@@ -895,61 +1068,136 @@ export const AdminView: React.FC = () => {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-              {products.map((product) => (
-                <div key={product.id} className="group relative bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden hover:shadow-xl hover:border-red-100 transition-all duration-300 flex flex-col h-full">
-                  {/* Image Container */}
-                  <div className="relative aspect-[4/3] overflow-hidden bg-slate-100">
-                    <img
-                      src={product.image_url}
-                      alt={product.name_ar}
-                      className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
-                      loading="lazy"
-                    />
-                    {!product.is_available && (
-                      <div className="absolute inset-0 bg-white/60 backdrop-blur-[2px] z-10 flex items-center justify-center">
-                        <span className="bg-slate-900 text-white px-4 py-2 rounded-full text-sm font-bold shadow-lg transform -rotate-6">
-                          غير متوفر حالياً
+              {products.map((product) => {
+                const isBranchAvailable = adminBranchScope !== 'all'
+                  ? isProductAvailableInBranch(product, adminBranchScope)
+                  : product.is_available;
+                const isStadiumAvailable = isProductAvailableInBranch(product, 'فرع الاستاد');
+                const isCaravanAvailable = isProductAvailableInBranch(product, 'فرع الكرفان');
+
+                return (
+                  <div key={product.id} className="group relative bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden hover:shadow-xl hover:border-red-100 transition-all duration-300 flex flex-col h-full">
+                    {/* Image Container */}
+                    <div className="relative aspect-[4/3] overflow-hidden bg-slate-100">
+                      <img
+                        src={product.image_url}
+                        alt={product.name_ar}
+                        className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
+                        loading="lazy"
+                      />
+                      {adminBranchScope !== 'all' ? (
+                        !isBranchAvailable && (
+                          <div className="absolute inset-0 bg-white/60 backdrop-blur-[2px] z-10 flex items-center justify-center">
+                            <span className="bg-slate-900 text-white px-3.5 py-1.5 rounded-full text-xs font-bold shadow-lg transform -rotate-3">
+                              غير متاح في {adminBranchScope}
+                            </span>
+                          </div>
+                        )
+                      ) : (
+                        !product.is_available ? (
+                          <div className="absolute inset-0 bg-white/60 backdrop-blur-[2px] z-10 flex items-center justify-center">
+                            <span className="bg-slate-900 text-white px-4 py-2 rounded-full text-sm font-bold shadow-lg transform -rotate-6">
+                              غير متوفر عام
+                            </span>
+                          </div>
+                        ) : (!isStadiumAvailable || !isCaravanAvailable) ? (
+                          <div className="absolute top-2 right-2 z-10">
+                            <span className="bg-amber-100 text-amber-900 border border-amber-300 font-bold text-[10px] px-2 py-0.5 rounded-full shadow-xs">
+                              {!isStadiumAvailable && !isCaravanAvailable ? 'معطل بالفروع' : !isStadiumAvailable ? 'معطل بالاستاد' : 'معطل بالكرفان'}
+                            </span>
+                          </div>
+                        ) : null
+                      )}
+                      <div className="absolute top-2 left-2 z-20 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={() => setEditingProduct(product)}
+                          className="bg-white text-slate-700 p-2 rounded-xl shadow-lg hover:bg-primary hover:text-white transition-colors"
+                          title="تعديل"
+                          aria-label="تعديل المنتج"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="p-5 flex flex-col flex-grow">
+                      <div className="flex justify-between items-start gap-4 mb-2">
+                        <h3 className="font-bold text-lg text-slate-900 line-clamp-1 group-hover:text-primary transition-colors">
+                          {product.name_ar}
+                        </h3>
+                        <span className="shrink-0 font-bold text-lg text-primary bg-red-50 px-2.5 py-1 rounded-lg">
+                          {product.price} ج.م
                         </span>
                       </div>
-                    )}
-                    <div className="absolute top-2 left-2 z-20 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={() => setEditingProduct(product)}
-                        className="bg-white text-slate-700 p-2 rounded-xl shadow-lg hover:bg-primary hover:text-white transition-colors"
-                        title="تعديل"
-                        aria-label="تعديل المنتج"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
+                      <p className="text-slate-500 text-sm leading-relaxed line-clamp-2 mb-4 flex-grow">
+                        {product.description_ar}
+                      </p>
 
-                  <div className="p-5 flex flex-col flex-grow">
-                    <div className="flex justify-between items-start gap-4 mb-2">
-                      <h3 className="font-bold text-lg text-slate-900 line-clamp-1 group-hover:text-primary transition-colors">
-                        {product.name_ar}
-                      </h3>
-                      <span className="shrink-0 font-bold text-lg text-primary bg-red-50 px-2.5 py-1 rounded-lg">
-                        {product.price} ج.م
-                      </span>
+                      {adminBranchScope !== 'all' ? (
+                        <button
+                          onClick={async () => {
+                            await toggleProductBranchAvailability(product.id, adminBranchScope);
+                            toast.success(!isBranchAvailable ? `تم إتاحة الصنف في ${adminBranchScope}` : `تم إيقاف الصنف في ${adminBranchScope}`);
+                          }}
+                          className={clsx(
+                            "w-full py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all active:scale-[0.98] border cursor-pointer",
+                            isBranchAvailable
+                              ? 'bg-white text-green-600 border-green-200 hover:bg-green-50'
+                              : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
+                          )}
+                        >
+                          <div className={clsx("w-2 h-2 rounded-full", isBranchAvailable ? 'bg-green-500 animate-pulse' : 'bg-slate-400')} />
+                          <span>{isBranchAvailable ? `متاح في ${adminBranchScope}` : `غير متاح في ${adminBranchScope}`}</span>
+                        </button>
+                      ) : (
+                        <div className="space-y-2">
+                          <button
+                            onClick={() => updateProduct(product.id, { is_available: !product.is_available })}
+                            className={clsx(
+                              "w-full py-2 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all active:scale-[0.98] border cursor-pointer",
+                              product.is_available
+                                ? 'bg-white text-green-600 border-green-200 hover:bg-green-50'
+                                : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
+                            )}
+                          >
+                            <div className={clsx("w-2 h-2 rounded-full", product.is_available ? 'bg-green-500 animate-pulse' : 'bg-slate-400')} />
+                            <span>{product.is_available ? 'متاح عام (كافة الفروع)' : 'غير متاح عام'}</span>
+                          </button>
+
+                          <div className="grid grid-cols-2 gap-1.5 pt-1.5 border-t border-slate-100">
+                            <button
+                              type="button"
+                              onClick={() => toggleProductBranchAvailability(product.id, 'فرع الاستاد')}
+                              className={clsx(
+                                "px-2 py-1.5 rounded-lg text-[11px] font-bold border transition-all flex items-center justify-center gap-1 cursor-pointer",
+                                isStadiumAvailable
+                                  ? "bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100"
+                                  : "bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200"
+                              )}
+                            >
+                              <div className={clsx("w-1.5 h-1.5 rounded-full", isStadiumAvailable ? "bg-emerald-500" : "bg-slate-400")} />
+                              <span>الاستاد: {isStadiumAvailable ? 'متاح' : 'معطل'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => toggleProductBranchAvailability(product.id, 'فرع الكرفان')}
+                              className={clsx(
+                                "px-2 py-1.5 rounded-lg text-[11px] font-bold border transition-all flex items-center justify-center gap-1 cursor-pointer",
+                                isCaravanAvailable
+                                  ? "bg-teal-50 text-teal-800 border-teal-200 hover:bg-teal-100"
+                                  : "bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200"
+                              )}
+                            >
+                              <div className={clsx("w-1.5 h-1.5 rounded-full", isCaravanAvailable ? "bg-teal-500" : "bg-slate-400")} />
+                              <span>الكرفان: {isCaravanAvailable ? 'متاح' : 'معطل'}</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <p className="text-slate-500 text-sm leading-relaxed line-clamp-2 mb-6 flex-grow">
-                      {product.description_ar}
-                    </p>
-                    <button
-                      onClick={() => updateProduct(product.id, { is_available: !product.is_available })}
-                      className={`w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-[0.98] border
-                        ${product.is_available
-                          ? 'bg-white text-green-600 border-green-200 hover:bg-green-50'
-                          : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
-                        }`}
-                    >
-                      <div className={`w-2 h-2 rounded-full ${product.is_available ? 'bg-green-500 animate-pulse' : 'bg-slate-400'}`} />
-                      <span>{product.is_available ? 'متاح للطلب' : 'غير متاح'}</span>
-                    </button>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         ) : activeTab === 'controls' ? (
@@ -959,112 +1207,292 @@ export const AdminView: React.FC = () => {
               <div>
                 <h2 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
                   <Settings2 className="w-6 h-6 text-primary" />
-                  التحكم التشغيلي
+                  {adminBranchScope !== 'all' ? `التحكم التشغيلي — ${adminBranchScope}` : 'التحكم التشغيلي العام والفروع'}
                 </h2>
-                <p className="text-slate-500 text-sm mt-1">إدارة حالة الموقع وقواعد الحد الأدنى للطلب</p>
+                <p className="text-slate-500 text-sm mt-1">
+                  {adminBranchScope !== 'all'
+                    ? `إدارة حالة فتح وإغلاق ${adminBranchScope} وتحديث رسالة الإغلاق المستقلة له دون التأثير على الفروع الأخرى`
+                    : 'إدارة حالة الموقع العام، وتشغيل الفروع المستقل، وقواعد الحد الأدنى للطلب'}
+                </p>
               </div>
             </div>
 
-            {/* ── Section 1: Global Status ─────────────────── */}
-            <div className="bg-white rounded-2xl p-6 md:p-8 border border-slate-100 shadow-sm space-y-6">
-              <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
-                <Power className="w-5 h-5 text-primary" />
-                <h3 className="text-xl font-bold text-slate-900">حالة الموقع</h3>
-              </div>
-
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl bg-slate-50 border border-slate-100">
-                <div className="space-y-1">
-                  <p className="font-bold text-slate-900">
-                    {isWebsiteOpen ? 'الموقع مفتوح للطلبات' : 'الموقع مغلق حالياً'}
-                  </p>
-                  <p className="text-sm text-slate-500">
-                    {isWebsiteOpen ? 'العملاء يمكنهم تقديم طلبات جديدة' : 'لا يمكن تقديم طلبات حالياً'}
-                  </p>
+            {adminBranchScope !== 'all' ? (
+              /* ── Branch Admin Operational Control ────────────── */
+              <div className="bg-white rounded-2xl p-6 md:p-8 border border-slate-100 shadow-sm space-y-6">
+                <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+                  {adminBranchScope === 'فرع الاستاد' ? <Store className="w-5 h-5 text-amber-600" /> : <Truck className="w-5 h-5 text-teal-600" />}
+                  <h3 className="text-xl font-bold text-slate-900">حالة {adminBranchScope}</h3>
                 </div>
-                <button
-                  onClick={handleToggleWebsite}
-                  className={clsx(
-                    "flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-sm transition-all shadow-sm active:scale-95",
-                    isWebsiteOpen
-                      ? "bg-green-100 text-green-700 hover:bg-green-200 border border-green-200"
-                      : "bg-red-100 text-red-700 hover:bg-red-200 border border-red-200"
-                  )}
-                >
-                  {isWebsiteOpen ? (
-                    <><ToggleRight className="w-5 h-5" /> مفتوح</>
-                  ) : (
-                    <><ToggleLeft className="w-5 h-5" /> مغلق</>
-                  )}
-                </button>
-              </div>
 
-              <div className="space-y-2">
-                <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 text-amber-500" />
-                  رسالة الإغلاق (تظهر للعملاء عند إغلاق الموقع)
-                </label>
-                <textarea
-                  rows={2}
-                  value={localClosedMessage}
-                  onChange={(e) => setLocalClosedMessage(e.target.value)}
-                  className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all placeholder:text-slate-300 font-medium resize-none"
-                  placeholder="مثال: المطعم مغلق حالياً، نلتقي الساعة 11 صباحاً"
-                />
-              </div>
-            </div>
+                {(() => {
+                  const isCurrentBranchOpen = isBranchOpen(globalSettings, adminBranchScope);
+                  return (
+                    <>
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl bg-slate-50 border border-slate-100">
+                        <div className="space-y-1">
+                          <p className="font-bold text-slate-900">
+                            {isCurrentBranchOpen ? `${adminBranchScope} مفتوح للطلبات` : `${adminBranchScope} مغلق حالياً`}
+                          </p>
+                          <p className="text-sm text-slate-500">
+                            {isCurrentBranchOpen
+                              ? 'العملاء يمكنهم طلب الوجبات من هذا الفرع واستلامها'
+                              : 'لن يتمكن العملاء من إتمام الطلبات على هذا الفرع حتى يتم إعادة فتحه'}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => handleToggleBranch(adminBranchScope as 'فرع الاستاد' | 'فرع الكرفان')}
+                          className={clsx(
+                            "flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-sm transition-all shadow-sm active:scale-95 cursor-pointer whitespace-nowrap",
+                            isCurrentBranchOpen
+                              ? "bg-green-100 text-green-700 hover:bg-green-200 border border-green-200"
+                              : "bg-red-100 text-red-700 hover:bg-red-200 border border-red-200"
+                          )}
+                        >
+                          {isCurrentBranchOpen ? (
+                            <><ToggleRight className="w-5 h-5" /> الفرع مفتوح</>
+                          ) : (
+                            <><ToggleLeft className="w-5 h-5" /> الفرع مغلق</>
+                          )}
+                        </button>
+                      </div>
 
-            {/* ── Section 2: Minimum Quantity Rules ────────── */}
-            <div className="bg-white rounded-2xl p-6 md:p-8 border border-slate-100 shadow-sm space-y-6">
-              <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
-                <Hash className="w-5 h-5 text-primary" />
-                <h3 className="text-xl font-bold text-slate-900">الحد الأدنى للطلب</h3>
-              </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                          <AlertTriangle className="w-4 h-4 text-amber-500" />
+                          رسالة إغلاق {adminBranchScope} (تظهر للعميل في صفحة الدفع عند اختيار الفرع وهو مغلق)
+                        </label>
+                        <textarea
+                          rows={2}
+                          value={adminBranchScope === 'فرع الاستاد' ? localStadiumClosedMessage : localCaravanClosedMessage}
+                          onChange={(e) => {
+                            if (adminBranchScope === 'فرع الاستاد') {
+                              setLocalStadiumClosedMessage(e.target.value);
+                            } else {
+                              setLocalCaravanClosedMessage(e.target.value);
+                            }
+                          }}
+                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all placeholder:text-slate-300 font-medium resize-none text-sm"
+                          placeholder={`مثال: ${adminBranchScope} مغلق حالياً، نسعد باستقبالكم غداً`}
+                        />
+                      </div>
+                    </>
+                  );
+                })()}
 
-              <p className="text-sm text-slate-500">
-                حدد الحد الأدنى لعدد القطع من كل قسم لإتمام الطلب. القيمة 1 تعني لا قيود.
-              </p>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {categories.map((cat) => (
-                  <div
-                    key={cat.id}
-                    className="flex items-center justify-between p-4 rounded-xl border border-slate-100 bg-slate-50"
+                <div className="flex justify-end pt-4 border-t border-slate-100">
+                  <button
+                    onClick={handleSaveControls}
+                    disabled={isSaving}
+                    className="flex items-center gap-2 bg-primary text-white px-8 py-3.5 rounded-xl font-bold text-sm hover:bg-red-700 transition-all shadow-lg shadow-red-500/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                   >
-                    <span className="font-bold text-slate-900 text-sm">{cat.name_ar}</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-slate-400">الحد الأدنى:</span>
-                      <input
-                        type="number"
-                        min={1}
-                        max={100}
-                        value={localMinQty[cat.id] ?? 1}
-                        onChange={(e) => setLocalMinQty(prev => ({
-                          ...prev,
-                          [cat.id]: Math.max(1, parseInt(e.target.value) || 1),
-                        }))}
-                        className="w-16 text-center bg-white border border-slate-200 rounded-lg py-2 font-bold text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
-                      />
+                    {isSaving ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <Save className="w-5 h-5" />
+                    )}
+                    حفظ إعدادات {adminBranchScope}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* ── Super Admin Operational Control (All Branches + Global) ── */
+              <>
+                {/* ── Section 1: Global Website Status ───────── */}
+                <div className="bg-white rounded-2xl p-6 md:p-8 border border-slate-100 shadow-sm space-y-6">
+                  <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+                    <Power className="w-5 h-5 text-primary" />
+                    <h3 className="text-xl font-bold text-slate-900">حالة الموقع العامة (كافة الفروع)</h3>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl bg-slate-50 border border-slate-100">
+                    <div className="space-y-1">
+                      <p className="font-bold text-slate-900">
+                        {isWebsiteOpen ? 'الموقع مفتوح بالكامل للطلبات' : 'الموقع مغلق بالكامل حالياً'}
+                      </p>
+                      <p className="text-sm text-slate-500">
+                        {isWebsiteOpen ? 'العملاء يمكنهم تقديم طلبات جديدة في أي فرع مفتوح' : 'الموقع مغلق كلياً ولا يمكن تقديم أي طلبات'}
+                      </p>
+                    </div>
+                    <button
+                      onClick={handleToggleWebsite}
+                      className={clsx(
+                        "flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-sm transition-all shadow-sm active:scale-95 cursor-pointer whitespace-nowrap",
+                        isWebsiteOpen
+                          ? "bg-green-100 text-green-700 hover:bg-green-200 border border-green-200"
+                          : "bg-red-100 text-red-700 hover:bg-red-200 border border-red-200"
+                      )}
+                    >
+                      {isWebsiteOpen ? (
+                        <><ToggleRight className="w-5 h-5" /> الموقع مفتوح</>
+                      ) : (
+                        <><ToggleLeft className="w-5 h-5" /> الموقع مغلق</>
+                      )}
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-500" />
+                      رسالة إغلاق الموقع العامة (تظهر عند إغلاق المطعم كلياً)
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={localClosedMessage}
+                      onChange={(e) => setLocalClosedMessage(e.target.value)}
+                      className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all placeholder:text-slate-300 font-medium resize-none text-sm"
+                      placeholder="مثال: المطعم مغلق حالياً، نلتقي الساعة 11 صباحاً"
+                    />
+                  </div>
+                </div>
+
+                {/* ── Section 2: Independent Branch Status Controls ── */}
+                <div className="bg-white rounded-2xl p-6 md:p-8 border border-slate-100 shadow-sm space-y-6">
+                  <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+                    <Store className="w-5 h-5 text-emerald-600" />
+                    <div>
+                      <h3 className="text-xl font-bold text-slate-900">تشغيل الفروع المستقل</h3>
+                      <p className="text-xs text-slate-500 mt-0.5">يمكن فتح أو إغلاق أي فرع بشكل مستقل مع تخصيص رسالة إغلاق لكل فرع</p>
                     </div>
                   </div>
-                ))}
-              </div>
-            </div>
 
-            {/* ── Save Button ──────────────────────────────── */}
-            <div className="flex justify-end">
-              <button
-                onClick={handleSaveControls}
-                disabled={isSaving}
-                className="flex items-center gap-2 bg-primary text-white px-8 py-3.5 rounded-xl font-bold text-sm hover:bg-red-700 transition-all shadow-lg shadow-red-500/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isSaving ? (
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                ) : (
-                  <Save className="w-5 h-5" />
-                )}
-                حفظ الإعدادات
-              </button>
-            </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* فرع الاستاد */}
+                    {(() => {
+                      const isStadiumOpen = isBranchOpen(globalSettings, 'فرع الاستاد');
+                      return (
+                        <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50/70 space-y-4">
+                          <div className="flex items-center justify-between">
+                            <span className="font-black text-slate-900 flex items-center gap-2">
+                              <Store className="w-4 h-4 text-amber-600" />
+                              <span>فرع الاستاد</span>
+                            </span>
+                            <button
+                              onClick={() => handleToggleBranch('فرع الاستاد')}
+                              className={clsx(
+                                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold text-xs transition-all shadow-xs active:scale-95 cursor-pointer",
+                                isStadiumOpen
+                                  ? "bg-green-100 text-green-700 hover:bg-green-200 border border-green-200"
+                                  : "bg-red-100 text-red-700 hover:bg-red-200 border border-red-200"
+                              )}
+                            >
+                              {isStadiumOpen ? (
+                                <><ToggleRight className="w-4 h-4" /> مفتوح</>
+                              ) : (
+                                <><ToggleLeft className="w-4 h-4" /> مغلق</>
+                              )}
+                            </button>
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-bold text-slate-600">رسالة إغلاق فرع الاستاد:</label>
+                            <textarea
+                              rows={2}
+                              value={localStadiumClosedMessage}
+                              onChange={(e) => setLocalStadiumClosedMessage(e.target.value)}
+                              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all placeholder:text-slate-300 font-medium resize-none text-xs"
+                              placeholder="رسالة تظهر للعملاء عند إغلاق فرع الاستاد"
+                            />
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* فرع الكرفان */}
+                    {(() => {
+                      const isCaravanOpen = isBranchOpen(globalSettings, 'فرع الكرفان');
+                      return (
+                        <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50/70 space-y-4">
+                          <div className="flex items-center justify-between">
+                            <span className="font-black text-slate-900 flex items-center gap-2">
+                              <Truck className="w-4 h-4 text-teal-600" />
+                              <span>فرع الكرفان</span>
+                            </span>
+                            <button
+                              onClick={() => handleToggleBranch('فرع الكرفان')}
+                              className={clsx(
+                                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold text-xs transition-all shadow-xs active:scale-95 cursor-pointer",
+                                isCaravanOpen
+                                  ? "bg-green-100 text-green-700 hover:bg-green-200 border border-green-200"
+                                  : "bg-red-100 text-red-700 hover:bg-red-200 border border-red-200"
+                              )}
+                            >
+                              {isCaravanOpen ? (
+                                <><ToggleRight className="w-4 h-4" /> مفتوح</>
+                              ) : (
+                                <><ToggleLeft className="w-4 h-4" /> مغلق</>
+                              )}
+                            </button>
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-bold text-slate-600">رسالة إغلاق فرع الكرفان:</label>
+                            <textarea
+                              rows={2}
+                              value={localCaravanClosedMessage}
+                              onChange={(e) => setLocalCaravanClosedMessage(e.target.value)}
+                              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all placeholder:text-slate-300 font-medium resize-none text-xs"
+                              placeholder="رسالة تظهر للعملاء عند إغلاق فرع الكرفان"
+                            />
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+
+                {/* ── Section 3: Minimum Quantity Rules ────────── */}
+                <div className="bg-white rounded-2xl p-6 md:p-8 border border-slate-100 shadow-sm space-y-6">
+                  <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+                    <Hash className="w-5 h-5 text-primary" />
+                    <h3 className="text-xl font-bold text-slate-900">الحد الأدنى للطلب</h3>
+                  </div>
+
+                  <p className="text-sm text-slate-500">
+                    حدد الحد الأدنى لعدد القطع من كل قسم لإتمام الطلب. القيمة 1 تعني لا قيود.
+                  </p>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {categories.map((cat) => (
+                      <div
+                        key={cat.id}
+                        className="flex items-center justify-between p-4 rounded-xl border border-slate-100 bg-slate-50"
+                      >
+                        <span className="font-bold text-slate-900 text-sm">{cat.name_ar}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-400">الحد الأدنى:</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={100}
+                            value={localMinQty[cat.id] ?? 1}
+                            onChange={(e) => setLocalMinQty(prev => ({
+                              ...prev,
+                              [cat.id]: Math.max(1, parseInt(e.target.value) || 1),
+                            }))}
+                            className="w-16 text-center bg-white border border-slate-200 rounded-lg py-2 font-bold text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* ── Save Button ──────────────────────────────── */}
+                <div className="flex justify-end">
+                  <button
+                    onClick={handleSaveControls}
+                    disabled={isSaving}
+                    className="flex items-center gap-2 bg-primary text-white px-8 py-3.5 rounded-xl font-bold text-sm hover:bg-red-700 transition-all shadow-lg shadow-red-500/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    {isSaving ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <Save className="w-5 h-5" />
+                    )}
+                    حفظ جميع الإعدادات
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         ) : (
           /* ── ANALYTICS & SALES TAB ─────────────────────── */
@@ -1212,6 +1640,52 @@ export const AdminView: React.FC = () => {
                     </span>
                   </div>
                 </div>
+              </div>
+
+              {/* Card 6: مبيعات الفروع / الفرع */}
+              <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm flex flex-col justify-between">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-sm font-bold text-slate-500">
+                    {adminBranchScope === 'all' ? 'مبيعات الفروع' : `مبيعات ${adminBranchScope}`}
+                  </span>
+                  <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600">
+                    <Store className="w-5 h-5" />
+                  </div>
+                </div>
+                {adminBranchScope === 'all' ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                      <span className="font-bold text-slate-700 flex items-center gap-1.5">
+                        <Store className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>فرع الاستاد ({branchAnalytics.stadiumCount})</span>
+                      </span>
+                      <span className="font-black text-emerald-700">{branchAnalytics.stadiumRev.toLocaleString('ar-EG')} ج.م</span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                      <span className="font-bold text-slate-700 flex items-center gap-1.5">
+                        <Truck className="w-3.5 h-3.5 text-amber-600" />
+                        <span>فرع الكرفان ({branchAnalytics.caravanCount})</span>
+                      </span>
+                      <span className="font-black text-amber-700">{branchAnalytics.caravanRev.toLocaleString('ar-EG')} ج.م</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                      <span className="font-bold text-slate-700 flex items-center gap-1.5">
+                        {adminBranchScope === 'فرع الاستاد' ? <Store className="w-3.5 h-3.5 text-amber-600" /> : <Truck className="w-3.5 h-3.5 text-teal-600" />}
+                        <span>طلبات الفرع المستلمة</span>
+                      </span>
+                      <span className="font-black text-slate-900">{validOrders.length} طلب</span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                      <span className="font-bold text-slate-700">إجمالي المبيعات النشطة</span>
+                      <span className="font-black text-emerald-700">
+                        {(adminBranchScope === 'فرع الاستاد' ? branchAnalytics.stadiumRev : branchAnalytics.caravanRev).toLocaleString('ar-EG')} ج.م
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1525,26 +1999,56 @@ export const AdminView: React.FC = () => {
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-3">
                                   {/* Toggle Switch */}
-                                  <button
-                                    onClick={async () => {
-                                      try {
-                                        await toggleOptionActive(option.id);
-                                        toast.success(option.is_active ? `تم إيقاف "${option.name_ar}"` : `تم تفعيل "${option.name_ar}"`);
-                                      } catch {
-                                        toast.error('حدث خطأ أثناء تغيير الحالة');
-                                      }
-                                    }}
-                                    className="transition-all"
-                                  >
-                                    {option.is_active ? (
-                                      <ToggleRight className="w-8 h-8 text-green-500" />
-                                    ) : (
-                                      <ToggleLeft className="w-8 h-8 text-slate-300" />
-                                    )}
-                                  </button>
+                                  {(() => {
+                                    const isOptBranchAvailable = adminBranchScope !== 'all'
+                                      ? (option.branch_availability?.[adminBranchScope] !== undefined
+                                          ? option.branch_availability[adminBranchScope]
+                                          : option.is_active)
+                                      : option.is_active;
+
+                                    return (
+                                      <button
+                                        onClick={async () => {
+                                          if (adminBranchScope !== 'all') {
+                                            const nextVal = !isOptBranchAvailable;
+                                            await updateOption(option.id, {
+                                              branch_availability: {
+                                                ...(option.branch_availability || {}),
+                                                [adminBranchScope]: nextVal,
+                                              }
+                                            });
+                                            toast.success(nextVal ? `تم إتاحة "${option.name_ar}" في ${adminBranchScope}` : `تم إيقاف "${option.name_ar}" في ${adminBranchScope}`);
+                                          } else {
+                                            try {
+                                              await toggleOptionActive(option.id);
+                                              toast.success(option.is_active ? `تم إيقاف "${option.name_ar}"` : `تم تفعيل "${option.name_ar}"`);
+                                            } catch {
+                                              toast.error('حدث خطأ أثناء تغيير الحالة');
+                                            }
+                                          }
+                                        }}
+                                        className="transition-all cursor-pointer"
+                                        title={adminBranchScope !== 'all' ? `تغيير توفر الصوص في ${adminBranchScope}` : 'تغيير توفر الصوص العام'}
+                                      >
+                                        {isOptBranchAvailable ? (
+                                          <ToggleRight className="w-8 h-8 text-green-500" />
+                                        ) : (
+                                          <ToggleLeft className="w-8 h-8 text-slate-300" />
+                                        )}
+                                      </button>
+                                    );
+                                  })()}
                                   <div>
-                                    <p className={clsx("text-sm font-bold", option.is_active ? "text-slate-800" : "text-slate-400 line-through")}>
+                                    <p className={clsx(
+                                      "text-sm font-bold",
+                                      (adminBranchScope !== 'all'
+                                        ? (option.branch_availability?.[adminBranchScope] !== undefined ? option.branch_availability[adminBranchScope] : option.is_active)
+                                        : option.is_active) ? "text-slate-800" : "text-slate-400 line-through"
+                                    )}>
                                       {option.name_ar}
+                                      {adminBranchScope !== 'all' && (
+                                        <span className="text-[10px] font-normal text-slate-400 mr-1.5">({adminBranchScope})</span>
+                                      )}
                                     </p>
                                     {option.price_delta > 0 && (
                                       <p className="text-xs text-slate-400">+{option.price_delta} ج.م</p>
