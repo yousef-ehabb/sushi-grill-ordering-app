@@ -31,6 +31,7 @@ export interface VerifiedOrderItem {
 export interface CreateOrderServerResult {
   success: boolean;
   orderId?: string;
+  orderNumber?: number;
   total?: number;
   subtotal?: number;
   deliveryFee?: number;
@@ -243,17 +244,38 @@ export async function processOrderCreation(
         }
         return {
           orderId: existing?.order_id as string,
+          orderNumber: existing?.order_number as number | undefined,
           total: existing?.total as number,
           isDuplicate: true,
         };
       }
 
-      // Step B: Atomically create order
+      // Step B: Atomically allocate sequential order number
+      const counterDocRef = db.collection('counters').doc('order_counter');
+      const counterSnap = await transaction.get(counterDocRef);
+      const counterData = counterSnap.data();
+
+      // Configurable starting number from settings or counter doc (default 1001)
+      const baseStartNumber = typeof settings?.initial_order_number === 'number'
+        ? settings.initial_order_number
+        : (typeof counterData?.start_number === 'number' ? counterData.start_number : 1001);
+
+      const nextOrderNumber = counterSnap.exists && typeof counterData?.current_number === 'number'
+        ? counterData.current_number + 1
+        : baseStartNumber;
+
+      transaction.set(counterDocRef, {
+        current_number: nextOrderNumber,
+        updated_at: fieldValueFactory.serverTimestamp(),
+      }, { merge: true });
+
+      // Step C: Atomically create order
       const newOrderRef = db.collection('orders').doc();
       const orderId = newOrderRef.id;
 
       const orderRecord = {
         id: orderId,
+        order_number: nextOrderNumber,
         customer_name: name,
         customer_phone: normalizedPhone,
         address: payload.type === 'delivery' ? address : '',
@@ -273,6 +295,7 @@ export async function processOrderCreation(
       // Set idempotency record
       transaction.set(idempDocRef, {
         order_id: orderId,
+        order_number: nextOrderNumber,
         customer_phone: normalizedPhone,
         user_id: authenticatedUserId || null,
         total: finalTotal,
@@ -284,6 +307,7 @@ export async function processOrderCreation(
 
       return {
         orderId,
+        orderNumber: nextOrderNumber,
         total: finalTotal,
         isDuplicate: false,
       };
@@ -292,6 +316,7 @@ export async function processOrderCreation(
     return {
       success: true,
       orderId: result.orderId,
+      orderNumber: result.orderNumber,
       total: result.total,
       subtotal: calculatedSubtotal,
       deliveryFee,

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { X, Clock, Truck, Store, ChefHat, Package, CircleDot, Loader2, UtensilsCrossed, Search, AlertCircle, RefreshCw } from 'lucide-react';
+import { X, Clock, Truck, Store, ChefHat, Package, CircleDot, Loader2, UtensilsCrossed, Search, AlertCircle, RefreshCw, Copy, Check } from 'lucide-react';
+import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
 import { doc, getDoc } from 'firebase/firestore';
 import { db, isFirebaseConfigured } from '../../lib/firebase';
@@ -10,6 +11,7 @@ import { resolveAllOptionNames } from '../utils/optionNames';
 
 interface ActiveOrderData {
     id: string;
+    order_number?: number | null;
     status: OrderStatus;
     type: string;
     branch?: string;
@@ -68,6 +70,7 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
     const [optionNames, setOptionNames] = useState<Map<string, string>>(new Map());
     const [loading, setLoading] = useState(false);
     const [fetchError, setFetchError] = useState<string | null>(null);
+    const [copied, setCopied] = useState(false);
 
     // Guest manual tracking form state
     const [manualOrderId, setManualOrderId] = useState('');
@@ -78,6 +81,8 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
         if (!isOpen) return;
 
         setFetchError(null);
+        if (orderId) setManualOrderId(orderId);
+        if (guestPhone) setManualPhone(guestPhone);
 
         // Scenario 1: Authenticated user tracking an active order
         if (user && orderId) {
@@ -129,6 +134,7 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
 
             setOrder({
                 id: orderData.id,
+                order_number: orderData.order_number || null,
                 status: orderData.status,
                 type: orderData.type,
                 branch: orderData.branch,
@@ -167,6 +173,7 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
 
             setOrder({
                 id: guestOrder.id,
+                order_number: (guestOrder as any).order_number || null,
                 status: guestOrder.status,
                 type: guestOrder.type,
                 branch: guestOrder.branch,
@@ -228,9 +235,25 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
                                     {hasOrder ? 'متابعة الطلب' : 'تتبع حالة طلبك'}
                                 </h2>
                                 {order && (
-                                    <p className="text-xs font-mono text-slate-400 mt-0.5">
-                                        #{order.id.slice(0, 10).toUpperCase()}
-                                    </p>
+                                    <div className="flex items-center gap-2 mt-1">
+                                        <span className="text-sm font-black text-primary font-mono bg-red-50 px-2 py-0.5 rounded-lg border border-red-100">
+                                            رقم الطلب: #{order.order_number || order.id.slice(0, 10).toUpperCase()}
+                                        </span>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                const textToCopy = order.order_number ? String(order.order_number) : order.id;
+                                                navigator.clipboard?.writeText(textToCopy);
+                                                setCopied(true);
+                                                toast.success('تم نسخ رقم الطلب');
+                                                setTimeout(() => setCopied(false), 2000);
+                                            }}
+                                            className="p-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors flex items-center justify-center"
+                                            title="نسخ رقم الطلب"
+                                        >
+                                            {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                                        </button>
+                                    </div>
                                 )}
                             </div>
                             <div className="flex items-center gap-2">
@@ -391,11 +414,11 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
 
                                     <form onSubmit={handleManualSearch} className="space-y-3.5">
                                         <div className="space-y-1">
-                                            <label className="text-xs font-bold text-slate-700 block">رقم الطلب</label>
+                                            <label className="text-xs font-bold text-slate-700 block">رقم الطلب (مثال: 1001 أو معرّف الطلب)</label>
                                             <input
                                                 type="text"
                                                 required
-                                                placeholder="مثال: ord_abc123 أو معرف الطلب"
+                                                placeholder="مثال: 1001 أو معرّف الطلب"
                                                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-mono focus:bg-white focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all"
                                                 value={manualOrderId}
                                                 onChange={(e) => setManualOrderId(e.target.value)}

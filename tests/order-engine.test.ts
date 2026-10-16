@@ -293,4 +293,116 @@ describe('Server-Authoritative Order Engine', () => {
     expect(res.code).toBe('OPTION_NOT_FOUND');
     expect(res.error).toContain('غير موجودة');
   });
+
+  describe('Sequential Order Numbers Allocation', () => {
+    it('allocates order number 1001 for the first order, and increments sequentially (1002, 1003)', async () => {
+      const payload1 = {
+        customer_name: 'عميل أول',
+        customer_phone: '01011111111',
+        type: 'pickup' as const,
+        branch: 'فرع الاستاد',
+        items: [{ product_id: 'prod_burger', quantity: 1 }],
+      };
+      const res1 = await processOrderCreation(db as any, payload1, null, mockFieldValue as any);
+      expect(res1.success).toBe(true);
+      expect(res1.orderNumber).toBe(1001);
+
+      const payload2 = {
+        customer_name: 'عميل ثان',
+        customer_phone: '01022222222',
+        type: 'pickup' as const,
+        branch: 'فرع الاستاد',
+        items: [{ product_id: 'prod_burger', quantity: 1 }],
+      };
+      const res2 = await processOrderCreation(db as any, payload2, null, mockFieldValue as any);
+      expect(res2.success).toBe(true);
+      expect(res2.orderNumber).toBe(1002);
+
+      const payload3 = {
+        customer_name: 'عميل ثالث',
+        customer_phone: '01033333333',
+        type: 'pickup' as const,
+        branch: 'فرع الاستاد',
+        items: [{ product_id: 'prod_burger', quantity: 1 }],
+      };
+      const res3 = await processOrderCreation(db as any, payload3, null, mockFieldValue as any);
+      expect(res3.success).toBe(true);
+      expect(res3.orderNumber).toBe(1003);
+
+      // Verify stored order records have order_number
+      const order1Doc = await db.collection('orders').doc(res1.orderId!).get();
+      expect(order1Doc.data()?.order_number).toBe(1001);
+      const order2Doc = await db.collection('orders').doc(res2.orderId!).get();
+      expect(order2Doc.data()?.order_number).toBe(1002);
+    });
+
+    it('allocates distinct, unique sequential numbers under simulated concurrent requests', async () => {
+      const promises = Array.from({ length: 5 }, (_, i) => {
+        return processOrderCreation(
+          db as any,
+          {
+            customer_name: `عميل متزامن ${i}`,
+            customer_phone: `0100000000${i}`,
+            type: 'pickup' as const,
+            branch: 'فرع الاستاد',
+            items: [{ product_id: 'prod_burger', quantity: 1 }],
+          },
+          null,
+          mockFieldValue as any
+        );
+      });
+
+      const results = await Promise.all(promises);
+      const numbers = results.map((r) => r.orderNumber);
+
+      // Ensure all 5 requests succeeded
+      expect(results.every((r) => r.success)).toBe(true);
+
+      // Ensure all 5 order numbers are unique
+      const uniqueNumbers = new Set(numbers);
+      expect(uniqueNumbers.size).toBe(5);
+
+      // Verify sequence is [1001, 1002, 1003, 1004, 1005]
+      expect(numbers.sort()).toEqual([1001, 1002, 1003, 1004, 1005]);
+    });
+
+    it('idempotent replay returns the exact same order number without consuming a new counter number', async () => {
+      const payload = {
+        customer_name: 'عميل متكرر',
+        customer_phone: '01099999999',
+        type: 'pickup' as const,
+        branch: 'فرع الاستاد',
+        items: [{ product_id: 'prod_burger', quantity: 1 }],
+        idempotency_key: 'test_idemp_key_123',
+      };
+
+      const firstCall = await processOrderCreation(db as any, payload, null, mockFieldValue as any);
+      expect(firstCall.success).toBe(true);
+      expect(firstCall.orderNumber).toBe(1001);
+      expect(firstCall.isDuplicate).toBe(false);
+
+      // Duplicate call with same idempotency key
+      const secondCall = await processOrderCreation(db as any, payload, null, mockFieldValue as any);
+      expect(secondCall.success).toBe(true);
+      expect(secondCall.orderNumber).toBe(1001);
+      expect(secondCall.orderId).toBe(firstCall.orderId);
+      expect(secondCall.isDuplicate).toBe(true);
+
+      // Next distinct order should get 1002, NOT 1003
+      const thirdCall = await processOrderCreation(
+        db as any,
+        {
+          customer_name: 'عميل جديد آخر',
+          customer_phone: '01088888888',
+          type: 'pickup' as const,
+          branch: 'فرع الاستاد',
+          items: [{ product_id: 'prod_burger', quantity: 1 }],
+        },
+        null,
+        mockFieldValue as any
+      );
+      expect(thirdCall.success).toBe(true);
+      expect(thirdCall.orderNumber).toBe(1002);
+    });
+  });
 });

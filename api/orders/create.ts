@@ -1,4 +1,4 @@
-import { getFirebaseAdmin } from '../../src/server/firebaseAdmin';
+import { getFirebaseAdmin, isFirebaseAdminConfigured } from '../../src/server/firebaseAdmin';
 import { processOrderCreation } from '../../src/server/orderEngine';
 import { getClientIp, checkRateLimit, applyRateLimitHeaders } from '../../src/server/rateLimiter';
 
@@ -34,6 +34,16 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
+    if (!isFirebaseAdminConfigured()) {
+      console.error('[API/create-order] Firebase Admin credentials not configured in environment variables');
+      return res.status(500).json({
+        success: false,
+        error: 'إعدادات خادم قاعدة البيانات غير مكتملة (يرجى ضبط متغيرات Firebase Admin في Vercel).',
+        code: 'FIREBASE_CREDENTIALS_MISSING',
+        details: 'Missing FIREBASE_SERVICE_ACCOUNT_KEY or (FIREBASE_PRIVATE_KEY and FIREBASE_CLIENT_EMAIL) in server environment variables.',
+      });
+    }
+
     const { adminDb, adminAuth } = getFirebaseAdmin();
 
     // 2. Authentication extraction (optional for guests, verified for signed-in users)
@@ -91,6 +101,7 @@ export default async function handler(req: any, res: any) {
     return res.status(200).json({
       success: true,
       orderId: result.orderId,
+      orderNumber: result.orderNumber,
       total: result.total,
       subtotal: result.subtotal,
       deliveryFee: result.deliveryFee,
@@ -98,10 +109,18 @@ export default async function handler(req: any, res: any) {
     });
   } catch (error: any) {
     console.error('[API/create-order] Internal error:', error);
+    const isCredentialsError =
+      error?.message?.includes('Could not load the default credentials') ||
+      error?.message?.includes('NO_ADC_FOUND') ||
+      error?.code === 16;
+
     return res.status(500).json({
       success: false,
-      error: 'حدث خطأ غير متوقع في معالجة طلبك، يرجى المحاولة مرة أخرى.',
-      code: 'SERVER_ERROR',
+      error: isCredentialsError
+        ? 'إعدادات خادم قاعدة البيانات غير مكتملة (يرجى ضبط متغيرات Firebase Admin في Vercel).'
+        : 'حدث خطأ غير متوقع في معالجة طلبك، يرجى المحاولة مرة أخرى.',
+      code: isCredentialsError ? 'FIREBASE_CREDENTIALS_MISSING' : 'SERVER_ERROR',
+      details: error?.message,
     });
   }
 }

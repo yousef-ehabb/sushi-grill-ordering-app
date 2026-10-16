@@ -51,6 +51,51 @@ export class MockFirestore {
           },
         };
       },
+      where(field: string, op: string, value: any) {
+        return {
+          limit(n: number) {
+            return {
+              async get() {
+                const col = self.getCollection(name);
+                const matches: any[] = [];
+                for (const [docId, docData] of col.entries()) {
+                  if (op === '==' && docData[field] === value) {
+                    matches.push({
+                      id: docId,
+                      exists: true,
+                      data: () => JSON.parse(JSON.stringify(docData)),
+                    });
+                    if (matches.length >= n) break;
+                  }
+                }
+                return {
+                  empty: matches.length === 0,
+                  docs: matches,
+                  size: matches.length,
+                };
+              },
+            };
+          },
+          async get() {
+            const col = self.getCollection(name);
+            const matches: any[] = [];
+            for (const [docId, docData] of col.entries()) {
+              if (op === '==' && docData[field] === value) {
+                matches.push({
+                  id: docId,
+                  exists: true,
+                  data: () => JSON.parse(JSON.stringify(docData)),
+                });
+              }
+            }
+            return {
+              empty: matches.length === 0,
+              docs: matches,
+              size: matches.length,
+            };
+          },
+        };
+      },
     };
   }
 

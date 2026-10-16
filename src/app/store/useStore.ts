@@ -86,12 +86,15 @@ export type OrderStatus = 'new' | 'preparing' | 'ready' | 'out_for_delivery' | '
 
 export type Order = {
   id: string;
+  order_number?: number;
   customer_name: string;
   customer_phone: string;
   address?: string;
   user_id?: string;
   type: 'pickup' | 'delivery';
   branch?: string;
+  subtotal?: number;
+  delivery_fee?: number;
   items: OrderItem[];
   total: number;
   status: OrderStatus;
@@ -177,7 +180,7 @@ interface AppState {
   clearCart: () => void;
 
   // Order Actions
-  submitOrder: (order: Omit<Order, 'id' | 'created_at' | 'status' | 'items'> & { items: CartItem[]; idempotency_key?: string }) => Promise<string | null>;
+  submitOrder: (order: Omit<Order, 'id' | 'created_at' | 'status' | 'items'> & { items: CartItem[]; idempotency_key?: string }) => Promise<{ orderId: string; orderNumber: number } | null>;
   reorderFromHistory: (items: OrderItem[]) => { added: number; skipped: string[] };
 
   // Admin Actions
@@ -552,7 +555,7 @@ export const useStore = create<AppState>()(
 
           const idempotencyKey = orderData.idempotency_key || `idemp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
-          const orderId = await ordersService.createOrder({
+          const result = await ordersService.createOrder({
             customer_name: orderData.customer_name,
             customer_phone: orderData.customer_phone,
             address: orderData.address,
@@ -576,7 +579,7 @@ export const useStore = create<AppState>()(
           });
 
           set({ loading: false });
-          return orderId;
+          return result;
         } catch (err: any) {
           set({ loading: false, error: err.message || 'فشل إنشاء الطلب' });
           console.error('Order submission failed:', err);
