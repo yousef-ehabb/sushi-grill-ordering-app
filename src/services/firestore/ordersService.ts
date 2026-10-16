@@ -29,16 +29,32 @@ export const ordersService = {
       subtotal?: number;
       delivery_fee?: number;
     }
-  ): Promise<string> {
+  ): Promise<{ orderId: string; orderNumber: number }> {
     if (!isFirebaseConfigured() || !db) {
       const mockId = 'ord_' + Math.random().toString(36).substring(2, 9);
       console.info('[Mock] Order created locally:', mockId);
-      return mockId;
+      return { orderId: mockId, orderNumber: 1001 };
     }
 
     try {
       const ordersRef = collection(db, ORDERS_COLLECTION);
       const newOrderDoc = doc(ordersRef);
+
+      let orderNumber = 1001;
+      try {
+        const counterRef = doc(db, 'counters', 'order_counter');
+        const counterSnap = await getDoc(counterRef);
+        if (counterSnap.exists()) {
+          const current = counterSnap.data()?.current_number;
+          if (typeof current === 'number') {
+            orderNumber = current + 1;
+          }
+        }
+        await setDoc(counterRef, { current_number: orderNumber, updated_at: serverTimestamp() }, { merge: true });
+      } catch (counterErr) {
+        console.warn('[OrdersService] Counter read error in dev fallback, using default sequence:', counterErr);
+        orderNumber = 1001;
+      }
 
       const items = (orderData.items || []).map((item) => ({
         id: item.id || 'item_' + Math.random().toString(36).substring(2, 7),
@@ -52,6 +68,7 @@ export const ordersService = {
 
       const orderPayload: Record<string, any> = {
         id: newOrderDoc.id,
+        order_number: orderNumber,
         customer_name: orderData.customer_name?.trim() || 'عميل بوشنكي',
         customer_phone: orderData.customer_phone?.trim() || '',
         address: orderData.address?.trim() || '',
@@ -68,8 +85,8 @@ export const ordersService = {
       };
 
       await setDoc(newOrderDoc, orderPayload);
-      console.info('[OrdersService] [Local Dev Fallback] Order created directly in Firestore:', newOrderDoc.id);
-      return newOrderDoc.id;
+      console.info('[OrdersService] [Local Dev Fallback] Order created directly in Firestore:', newOrderDoc.id, 'Number:', orderNumber);
+      return { orderId: newOrderDoc.id, orderNumber };
     } catch (error) {
       console.error('[OrdersService] Direct fallback creation failed:', error);
       throw error;
@@ -86,11 +103,11 @@ export const ordersService = {
       subtotal?: number;
       delivery_fee?: number;
     }
-  ): Promise<string> {
+  ): Promise<{ orderId: string; orderNumber: number }> {
     if (!isFirebaseConfigured() || !db) {
       const mockId = 'ord_' + Math.random().toString(36).substring(2, 9);
       console.info('[Mock] Order created locally:', mockId);
-      return mockId;
+      return { orderId: mockId, orderNumber: 1001 };
     }
 
     const rawCartItems = (orderData.raw_items && orderData.raw_items.length > 0)
@@ -156,7 +173,10 @@ export const ordersService = {
       throw new Error(errorMsg);
     }
 
-    return data.orderId;
+    return {
+      orderId: data.orderId,
+      orderNumber: data.orderNumber || 1001,
+    };
   },
 
   /**

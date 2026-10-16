@@ -108,5 +108,11 @@ service cloud.firestore {
     match /idempotency_records/{recordId} {
       allow read, write: if false;
     }
+
+    // Counters collection (sequential order numbers) - server-managed
+    match /counters/{counterId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
   }
 }

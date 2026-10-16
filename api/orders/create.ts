@@ -91,6 +91,7 @@ export default async function handler(req: any, res: any) {
     return res.status(200).json({
       success: true,
       orderId: result.orderId,
+      orderNumber: result.orderNumber,
       total: result.total,
       subtotal: result.subtotal,
       deliveryFee: result.deliveryFee,

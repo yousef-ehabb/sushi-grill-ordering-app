@@ -46,8 +46,32 @@ export default async function handler(req: any, res: any) {
     const { adminDb } = getFirebaseAdmin();
     const normalizedInputPhone = normalizePhoneEgyptian(phone.trim());
 
-    const orderDoc = await adminDb.collection('orders').doc(orderId.trim()).get();
-    if (!orderDoc.exists) {
+    const cleanLookup = orderId.trim();
+    let orderDoc: any = null;
+
+    // 1. If lookup is numeric (e.g. "1001"), check by order_number first
+    if (/^\d+$/.test(cleanLookup)) {
+      const numericOrderNum = parseInt(cleanLookup, 10);
+      const querySnap = await adminDb
+        .collection('orders')
+        .where('order_number', '==', numericOrderNum)
+        .limit(1)
+        .get();
+
+      if (!querySnap.empty && querySnap.docs.length > 0) {
+        orderDoc = querySnap.docs[0];
+      }
+    }
+
+    // 2. Fallback: Lookup by Firestore document ID (supports legacy IDs or direct doc refs)
+    if (!orderDoc) {
+      const directDoc = await adminDb.collection('orders').doc(cleanLookup).get();
+      if (directDoc.exists) {
+        orderDoc = directDoc;
+      }
+    }
+
+    if (!orderDoc || !orderDoc.exists) {
       return res.status(404).json({
         success: false,
         error: 'لم يتم العثور على الطلب المطلوب',
@@ -72,6 +96,9 @@ export default async function handler(req: any, res: any) {
       success: true,
       order: {
         id: orderDoc.id,
+        order_number: data.order_number || null,
+        customer_name: data.customer_name,
+        customer_phone: data.customer_phone,
         status: data.status,
         type: data.type,
         branch: data.branch,
