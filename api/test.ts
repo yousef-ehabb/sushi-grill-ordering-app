@@ -11,8 +11,9 @@ export default async function handler(req: any, res: any) {
       const serviceAccountKey = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
       if (serviceAccountKey) {
         const parsed = JSON.parse(serviceAccountKey);
+        const certFn = firebase.cert || (firebase.credential && firebase.credential.cert);
         app = firebase.initializeApp({
-          credential: firebase.credential.cert(parsed),
+          credential: certFn(parsed),
           projectId: parsed.project_id || 'pochinki-burger',
         });
       } else {
