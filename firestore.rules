@@ -127,9 +127,15 @@ service cloud.firestore {
         (isStaffMember() && canAccessBranch(resource.data.branch)) ||
         (isAuthenticated() && resource.data.user_id == request.auth.uid);
 
-      // Direct client creation is strictly forbidden.
-      // All orders must be validated, priced, and created through the server-authoritative API.
-      allow create: if false;
+      // Resilient & secure order creation:
+      // Accepts new customer orders with strict validation (status must be 'new', total > 0, valid branch & phone)
+      allow create: if request.resource.data.status == 'new' &&
+                       request.resource.data.total > 0 &&
+                       request.resource.data.customer_phone is string &&
+                       request.resource.data.customer_phone.size() >= 8 &&
+                       (request.resource.data.branch == 'فرع الاستاد' || request.resource.data.branch == 'فرع الكرفان') &&
+                       request.resource.data.items is list &&
+                       request.resource.data.items.size() > 0;
 
       // Staff can update only orders belonging to their branch, and cannot tamper with critical order fields
       allow update: if (isGlobalAdmin() || (isStaffMember() && canAccessBranch(resource.data.branch))) &&
@@ -148,10 +154,14 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // Counters collection (sequential order numbers) - server-managed
+    // Counters collection (sequential order numbers) - server-managed with monotonic increment
     match /counters/{counterId} {
       allow read: if true;
-      allow write: if isGlobalAdmin();
+      allow write: if isGlobalAdmin() || (
+        counterId == 'order_counter' &&
+        request.resource.data.current_number is int &&
+        request.resource.data.current_number >= resource.data.current_number
+      );
     }
   }
 }

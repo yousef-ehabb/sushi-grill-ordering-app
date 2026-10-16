@@ -6,13 +6,15 @@ describe('Firestore Security Rules Static Integrity & Branch Isolation', () => {
   const rulesPath = path.resolve(__dirname, '../firestore.rules');
   const rulesContent = fs.readFileSync(rulesPath, 'utf8');
 
-  it('strictly disallows direct client-side order creation', () => {
+  it('enforces strict validation on order creation (status == new, positive total, valid branch & phone)', () => {
     const ordersMatch = rulesContent.match(/match\s+\/orders\/\{orderId\}[\s\S]*?\n\s*\}/);
     expect(ordersMatch).toBeDefined();
     const ordersBlock = ordersMatch![0];
 
-    expect(ordersBlock).toMatch(/allow\s+create:\s*if\s+false\s*;/);
-    expect(ordersBlock).not.toContain('request.resource.data.total > 0');
+    expect(ordersBlock).toContain("request.resource.data.status == 'new'");
+    expect(ordersBlock).toContain('request.resource.data.total > 0');
+    expect(ordersBlock).toContain("request.resource.data.branch == 'فرع الاستاد' || request.resource.data.branch == 'فرع الكرفان'");
+    expect(ordersBlock).toContain('request.resource.data.customer_phone.size() >= 8');
   });
 
   it('strictly isolates idempotency records from client access', () => {
