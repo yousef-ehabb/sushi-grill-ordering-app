@@ -1,6 +1,183 @@
-import { getFirebaseAdmin, isFirebaseAdminConfigured } from '../../src/server/firebaseAdmin';
-import { normalizePhoneEgyptian } from '../../src/server/orderEngine';
-import { getClientIp, checkRateLimit, applyRateLimitHeaders } from '../../src/server/rateLimiter';
+import admin from 'firebase-admin';
+import { getFirestore, type Firestore } from 'firebase-admin/firestore';
+
+interface MemoryBucket {
+  count: number;
+  resetAtMs: number;
+}
+const memoryStore = new Map<string, MemoryBucket>();
+
+let mockDbOverride: any = null;
+let mockConfiguredOverride: boolean | null = null;
+
+export function setTrackMockDb(mockDb: any) {
+  mockDbOverride = mockDb;
+}
+
+export function setTrackConfigured(configured: boolean | null) {
+  mockConfiguredOverride = configured;
+}
+
+export function resetTrackMemoryRateLimiter(): void {
+  memoryStore.clear();
+}
+
+export function getClientIp(req: any): string {
+  if (!req || !req.headers) return '127.0.0.1';
+  let rawIp = '';
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.length > 0) {
+    rawIp = forwarded.split(',')[0].trim();
+  } else if (typeof req.headers['x-real-ip'] === 'string' && req.headers['x-real-ip'].length > 0) {
+    rawIp = req.headers['x-real-ip'].trim();
+  } else {
+    rawIp = req.socket?.remoteAddress || req.connection?.remoteAddress || '127.0.0.1';
+  }
+  if (rawIp.startsWith('::ffff:')) rawIp = rawIp.slice(7);
+  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+$/.test(rawIp)) rawIp = rawIp.split(':')[0];
+  return rawIp.trim() || '127.0.0.1';
+}
+
+export async function checkRateLimit(
+  identifier: string,
+  config: { maxRequests: number; windowSeconds: number; prefix: string }
+) {
+  const upstashUrl = process.env.UPSTASH_REDIS_REST_URL;
+  const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN;
+  const now = Date.now();
+  const key = `ratelimit:${config.prefix}:${encodeURIComponent(identifier || '127.0.0.1')}`;
+
+  if (upstashUrl && upstashToken) {
+    try {
+      const pipelineRes = await fetch(`${upstashUrl}/pipeline`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${upstashToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify([
+          ['INCR', key],
+          ['EXPIRE', key, config.windowSeconds, 'NX'],
+          ['TTL', key],
+        ]),
+      });
+      if (pipelineRes.ok) {
+        const data = await pipelineRes.json();
+        const count = Number(data[0]?.result) || 1;
+        const ttl = Number(data[2]?.result) || config.windowSeconds;
+        return {
+          allowed: count <= config.maxRequests,
+          limit: config.maxRequests,
+          remaining: Math.max(0, config.maxRequests - count),
+          resetAt: Math.floor(now / 1000) + (ttl > 0 ? ttl : config.windowSeconds),
+          mode: 'upstash_redis' as const,
+        };
+      }
+    } catch (err) {}
+  }
+
+  let bucket = memoryStore.get(key);
+  if (!bucket || bucket.resetAtMs <= now) {
+    bucket = { count: 1, resetAtMs: now + config.windowSeconds * 1000 };
+    memoryStore.set(key, bucket);
+  } else {
+    bucket.count += 1;
+  }
+
+  return {
+    allowed: bucket.count <= config.maxRequests,
+    limit: config.maxRequests,
+    remaining: Math.max(0, config.maxRequests - bucket.count),
+    resetAt: Math.ceil(bucket.resetAtMs / 1000),
+    mode: 'in_memory_fallback' as const,
+  };
+}
+
+export function normalizePhoneEgyptian(phone: string): string {
+  if (!phone || typeof phone !== 'string') return '';
+  const cleaned = phone.replace(/[\s\-\+]/g, '');
+  if (cleaned.startsWith('20') && cleaned.length === 12) {
+    return '0' + cleaned.slice(2);
+  }
+  return cleaned;
+}
+
+let appInstance: any = null;
+
+export function isFirebaseAdminConfigured(): boolean {
+  if (mockConfiguredOverride !== null) return mockConfiguredOverride;
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) return true;
+  if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) return true;
+  return false;
+}
+
+export function getTrackDb(): Firestore {
+  if (mockDbOverride) return mockDbOverride;
+
+  const firebase = (admin as any).default || admin;
+  if (!appInstance) {
+    const existingApps = firebase.apps;
+    if (existingApps && existingApps.length > 0 && existingApps[0]) {
+      appInstance = existingApps[0];
+    } else {
+      const certFn = firebase.cert || (firebase.credential && firebase.credential.cert);
+      const serviceAccountKey = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+      if (serviceAccountKey) {
+        try {
+          const parsed = JSON.parse(serviceAccountKey);
+          appInstance = firebase.initializeApp({
+            credential: certFn ? certFn(parsed) : undefined,
+            projectId: parsed.project_id || process.env.VITE_FIREBASE_PROJECT_ID || 'pochinki-burger',
+          });
+        } catch (err) {
+          console.error('[FirebaseAdmin] Error parsing FIREBASE_SERVICE_ACCOUNT_KEY:', err);
+        }
+      }
+
+      if (!appInstance && process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
+        try {
+          const privateKey = process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n');
+          appInstance = firebase.initializeApp({
+            credential: certFn
+              ? certFn({
+                  projectId: process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || 'pochinki-burger',
+                  clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+                  privateKey,
+                })
+              : undefined,
+          });
+        } catch (err) {
+          console.error('[FirebaseAdmin] Error initializing with private key env vars:', err);
+        }
+      }
+
+      if (!appInstance) {
+        appInstance = firebase.initializeApp({
+          projectId: process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || 'pochinki-burger',
+        });
+      }
+    }
+  }
+  return getFirestore(appInstance);
+}
+
+async function resolveAdmin(): Promise<{ adminDb: Firestore; isConfigured: boolean }> {
+  try {
+    const serverAdmin = await import('../../src/server/firebaseAdmin');
+    if (serverAdmin && typeof serverAdmin.getFirebaseAdmin === 'function') {
+      return {
+        adminDb: serverAdmin.getFirebaseAdmin().adminDb,
+        isConfigured: serverAdmin.isFirebaseAdminConfigured(),
+      };
+    }
+  } catch (e) {
+    // In Vercel serverless environment, use self-contained getTrackDb
+  }
+  return {
+    adminDb: getTrackDb(),
+    isConfigured: isFirebaseAdminConfigured(),
+  };
+}
 
 export default async function handler(req: any, res: any) {
   try {
@@ -23,7 +200,16 @@ export default async function handler(req: any, res: any) {
       maxRequests: 30,
       windowSeconds: 300,
     });
-    applyRateLimitHeaders(res, rateLimitResult);
+    if (res.setHeader) {
+      res.setHeader('X-RateLimit-Limit', String(rateLimitResult.limit));
+      res.setHeader('X-RateLimit-Remaining', String(rateLimitResult.remaining));
+      res.setHeader('X-RateLimit-Reset', String(rateLimitResult.resetAt));
+      res.setHeader('X-RateLimit-Mode', rateLimitResult.mode);
+      if (!rateLimitResult.allowed) {
+        const retryAfter = Math.max(1, rateLimitResult.resetAt - Math.floor(Date.now() / 1000));
+        res.setHeader('Retry-After', String(retryAfter));
+      }
+    }
 
     if (!rateLimitResult.allowed) {
       return res.status(429).json({
@@ -33,7 +219,7 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    const { orderId, phone } = req.query;
+    const { orderId, phone } = req.query || {};
 
     if (!orderId || typeof orderId !== 'string' || !phone || typeof phone !== 'string') {
       return res.status(400).json({
@@ -42,7 +228,10 @@ export default async function handler(req: any, res: any) {
         code: 'MISSING_PARAMS',
       });
     }
-    if (!isFirebaseAdminConfigured()) {
+
+    const { adminDb, isConfigured } = await resolveAdmin();
+
+    if (!isConfigured) {
       console.error('[API/orders/track] Firebase Admin credentials not configured in environment variables');
       return res.status(500).json({
         success: false,
@@ -51,8 +240,6 @@ export default async function handler(req: any, res: any) {
         details: 'Missing FIREBASE_SERVICE_ACCOUNT_KEY or (FIREBASE_PRIVATE_KEY and FIREBASE_CLIENT_EMAIL) in server environment variables.',
       });
     }
-
-    const { adminDb } = getFirebaseAdmin();
     const normalizedInputPhone = normalizePhoneEgyptian(phone.trim());
 
     const cleanLookup = orderId.trim();
