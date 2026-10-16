@@ -1,6 +1,5 @@
 import admin from 'firebase-admin';
-import { getFirestore, FieldValue, type Firestore } from 'firebase-admin/firestore';
-import { getAuth, type Auth } from 'firebase-admin/auth';
+import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 
 // ----------------- Self-Contained Fallbacks for Vercel Serverless Runtime -----------------
 
@@ -71,9 +70,28 @@ function getCreateDb(): Firestore {
   return getFirestore(app);
 }
 
-function getCreateAuth(): Auth {
+function getCreateAuth(): any {
+  const firebase = (admin as any).default || admin;
   const app = initFirebaseApp();
-  return getAuth(app);
+  if (typeof firebase.auth === 'function') {
+    return firebase.auth(app);
+  }
+  return {
+    verifyIdToken: async () => {
+      throw new Error('Auth verifyIdToken unavailable');
+    },
+  };
+}
+
+function getFieldValue(): any {
+  const firebase = (admin as any).default || admin;
+  if (firebase.firestore && firebase.firestore.FieldValue) {
+    return firebase.firestore.FieldValue;
+  }
+  return {
+    serverTimestamp: () => new Date().toISOString(),
+    increment: (n: number) => n,
+  };
 }
 
 function localGetClientIp(req: any): string {
@@ -179,7 +197,7 @@ async function localProcessOrderCreation(
   db: Firestore,
   payload: any,
   authenticatedUserId: string | null = null,
-  fieldValueFactory: any = FieldValue
+  fieldValueFactory: any = getFieldValue()
 ) {
   if (!payload || typeof payload !== 'object') {
     return { success: false, error: 'بيانات الطلب غير صالحة', code: 'INVALID_PAYLOAD' };
@@ -431,36 +449,44 @@ async function localProcessOrderCreation(
 }
 
 async function resolveDependencies() {
+  let dbGetter: () => any = () => ({ adminDb: getCreateDb(), adminAuth: getCreateAuth() });
+  let isConfiguredGetter: () => boolean = isCreateFirebaseConfigured;
+  let orderEngineGetter: (db: any, payload: any, userId?: any, fieldValue?: any) => Promise<any> = localProcessOrderCreation;
+  let ipGetter: (req: any) => string = localGetClientIp;
+  let rateLimitGetter: (ip: string, cfg: any) => Promise<any> = localCheckRateLimit;
+  let rateLimitHeadersGetter: (res: any, result: any) => void = localApplyRateLimitHeaders;
+
   try {
-    const [adminMod, engineMod, rateMod] = await Promise.all([
-      import('../../src/server/firebaseAdmin'),
-      import('../../src/server/orderEngine'),
-      import('../../src/server/rateLimiter'),
-    ]);
-    if (adminMod?.getFirebaseAdmin && engineMod?.processOrderCreation && rateMod?.checkRateLimit) {
-      return {
-        getFirebaseAdmin: adminMod.getFirebaseAdmin,
-        isFirebaseAdminConfigured: adminMod.isFirebaseAdminConfigured,
-        processOrderCreation: engineMod.processOrderCreation,
-        getClientIp: rateMod.getClientIp,
-        checkRateLimit: rateMod.checkRateLimit,
-        applyRateLimitHeaders: rateMod.applyRateLimitHeaders,
-      };
+    const serverAdmin = await import('../../src/server/firebaseAdmin');
+    if (serverAdmin && typeof serverAdmin.getFirebaseAdmin === 'function') {
+      dbGetter = serverAdmin.getFirebaseAdmin;
+      isConfiguredGetter = serverAdmin.isFirebaseAdminConfigured;
     }
-  } catch (e) {
-    // In Vercel serverless environment, use self-contained implementations
-  }
+  } catch (e) {}
+
+  try {
+    const serverEngine = await import('../../src/server/orderEngine');
+    if (serverEngine && typeof serverEngine.processOrderCreation === 'function') {
+      orderEngineGetter = serverEngine.processOrderCreation;
+    }
+  } catch (e) {}
+
+  try {
+    const serverRate = await import('../../src/server/rateLimiter');
+    if (serverRate && typeof serverRate.checkRateLimit === 'function') {
+      ipGetter = serverRate.getClientIp;
+      rateLimitGetter = serverRate.checkRateLimit;
+      rateLimitHeadersGetter = serverRate.applyRateLimitHeaders;
+    }
+  } catch (e) {}
+
   return {
-    getFirebaseAdmin: () => {
-      const db = getCreateDb();
-      const auth = getCreateAuth();
-      return { adminDb: db, adminAuth: auth, adminApp: appInstance };
-    },
-    isFirebaseAdminConfigured: isCreateFirebaseConfigured,
-    processOrderCreation: localProcessOrderCreation,
-    getClientIp: localGetClientIp,
-    checkRateLimit: localCheckRateLimit,
-    applyRateLimitHeaders: localApplyRateLimitHeaders,
+    getFirebaseAdmin: dbGetter,
+    isFirebaseAdminConfigured: isConfiguredGetter,
+    processOrderCreation: orderEngineGetter,
+    getClientIp: ipGetter,
+    checkRateLimit: rateLimitGetter,
+    applyRateLimitHeaders: rateLimitHeadersGetter,
   };
 }
 
@@ -518,7 +544,7 @@ export default async function handler(req: any, res: any) {
 
     if (authHeader && typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
       const idToken = authHeader.split('Bearer ')[1]?.trim();
-      if (idToken) {
+      if (idToken && adminAuth && typeof adminAuth.verifyIdToken === 'function') {
         try {
           const decoded = await adminAuth.verifyIdToken(idToken);
           authenticatedUserId = decoded.uid;
