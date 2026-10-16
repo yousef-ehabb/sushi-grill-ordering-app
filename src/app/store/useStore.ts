@@ -559,7 +559,8 @@ export const useStore = create<AppState>()(
             user_id: orderData.user_id,
             type: orderData.type,
             branch: orderData.branch,
-            total: 0, // Recalculated server-side by validation engine
+            total: orderData.total || 0,
+            subtotal: orderData.total || 0,
             status: 'new',
             idempotency_key: idempotencyKey,
             raw_items: orderData.items,

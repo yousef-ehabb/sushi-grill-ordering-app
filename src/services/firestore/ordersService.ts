@@ -19,6 +19,64 @@ const ORDERS_COLLECTION = 'orders';
 
 export const ordersService = {
   /**
+   * Direct Firestore creation fallback for local development (npm run dev)
+   * Activated only when the Vercel Serverless API (/api/orders/create) is not running locally.
+   */
+  async createOrderDirectFallback(
+    orderData: Omit<Order, 'id' | 'created_at'> & {
+      idempotency_key?: string;
+      raw_items?: any[];
+      subtotal?: number;
+      delivery_fee?: number;
+    }
+  ): Promise<string> {
+    if (!isFirebaseConfigured() || !db) {
+      const mockId = 'ord_' + Math.random().toString(36).substring(2, 9);
+      console.info('[Mock] Order created locally:', mockId);
+      return mockId;
+    }
+
+    try {
+      const ordersRef = collection(db, ORDERS_COLLECTION);
+      const newOrderDoc = doc(ordersRef);
+
+      const items = (orderData.items || []).map((item) => ({
+        id: item.id || 'item_' + Math.random().toString(36).substring(2, 7),
+        product_id: item.product_id || '',
+        name_ar: item.name_ar || '',
+        quantity: Number(item.quantity) || 1,
+        unit_price: Number(item.unit_price) || 0,
+        selected_option_ids: Array.isArray(item.selected_option_ids) ? item.selected_option_ids : [],
+        special_instructions: item.special_instructions || '',
+      }));
+
+      const orderPayload: Record<string, any> = {
+        id: newOrderDoc.id,
+        customer_name: orderData.customer_name?.trim() || 'عميل بوشنكي',
+        customer_phone: orderData.customer_phone?.trim() || '',
+        address: orderData.address?.trim() || '',
+        user_id: orderData.user_id || null,
+        type: orderData.type || 'pickup',
+        branch: orderData.branch?.trim() || '',
+        total: Number(orderData.total) || 0,
+        subtotal: Number(orderData.subtotal || orderData.total) || 0,
+        delivery_fee: Number(orderData.delivery_fee) || 0,
+        status: 'new' as OrderStatus,
+        created_at: new Date().toISOString(),
+        server_timestamp: serverTimestamp(),
+        items,
+      };
+
+      await setDoc(newOrderDoc, orderPayload);
+      console.info('[OrdersService] [Local Dev Fallback] Order created directly in Firestore:', newOrderDoc.id);
+      return newOrderDoc.id;
+    } catch (error) {
+      console.error('[OrdersService] Direct fallback creation failed:', error);
+      throw error;
+    }
+  },
+
+  /**
    * Create a new order via trusted server-authoritative API with atomic idempotency
    */
   async createOrder(
@@ -60,22 +118,36 @@ export const ordersService = {
       }
     }
 
-    const response = await fetch('/api/orders/create', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(idToken ? { 'Authorization': `Bearer ${idToken}` } : {}),
-      },
-      body: JSON.stringify({
-        customer_name: orderData.customer_name,
-        customer_phone: orderData.customer_phone,
-        address: orderData.address,
-        type: orderData.type,
-        branch: orderData.branch,
-        items: serverItems,
-        idempotency_key: orderData.idempotency_key,
-      }),
-    });
+    let response: Response;
+    try {
+      response = await fetch('/api/orders/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(idToken ? { 'Authorization': `Bearer ${idToken}` } : {}),
+        },
+        body: JSON.stringify({
+          customer_name: orderData.customer_name,
+          customer_phone: orderData.customer_phone,
+          address: orderData.address,
+          type: orderData.type,
+          branch: orderData.branch,
+          items: serverItems,
+          idempotency_key: orderData.idempotency_key,
+        }),
+      });
+    } catch (netErr) {
+      if (import.meta.env.DEV) {
+        console.warn('[OrdersService] Serverless API route unreachable in local dev. Using direct Firestore fallback.');
+        return await this.createOrderDirectFallback(orderData);
+      }
+      throw netErr;
+    }
+
+    if (response.status === 404 && import.meta.env.DEV) {
+      console.warn('[OrdersService] /api/orders/create returned 404 in local Vite dev server. Using direct Firestore fallback.');
+      return await this.createOrderDirectFallback(orderData);
+    }
 
     const data = await response.json().catch(() => null);
 
@@ -93,10 +165,17 @@ export const ordersService = {
   async trackGuestOrder(orderId: string, phone: string): Promise<Order | null> {
     try {
       const res = await fetch(`/api/orders/track?orderId=${encodeURIComponent(orderId)}&phone=${encodeURIComponent(phone)}`);
+      if (res.status === 404 && import.meta.env.DEV) {
+        console.warn('[OrdersService] /api/orders/track is 404 in local Vite dev server. Falling back to direct getOrderById.');
+        return await this.getOrderById(orderId);
+      }
       const data = await res.json();
       if (!res.ok || !data?.success) return null;
       return data.order;
     } catch (err) {
+      if (import.meta.env.DEV) {
+        return await this.getOrderById(orderId);
+      }
       console.error('[OrdersService] Error tracking guest order:', err);
       return null;
     }
