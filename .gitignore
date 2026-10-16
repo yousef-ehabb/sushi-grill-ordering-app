@@ -11,6 +11,7 @@ coverage
 opencode.json
 opencode.local.json
 .vercel
+.firebase
 *.zip
 public/*.zip
 public/cropper.*
