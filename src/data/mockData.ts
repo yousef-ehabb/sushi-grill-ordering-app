@@ -197,6 +197,16 @@ export const INITIAL_GLOBAL_SETTINGS: GlobalSettings = {
   id: 'settings-1',
   is_website_open: true,
   closed_message: 'المطعم مغلق حالياً، نسعد باستقبال طلباتكم في أوقات العمل القادمة.',
+  branches: {
+    'فرع الاستاد': {
+      is_open: true,
+      closed_message: 'فرع الاستاد مغلق حالياً، نسعد باستقبال طلباتكم في أوقات العمل القادمة.',
+    },
+    'فرع الكرفان': {
+      is_open: true,
+      closed_message: 'فرع الكرفان مغلق حالياً، نسعد باستقبال طلباتكم في أوقات العمل القادمة.',
+    },
+  },
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),
 };

@@ -15,6 +15,7 @@ interface OrderDetail {
     customer_phone: string;
     address?: string;
     type: string;
+    branch?: string;
     total: number;
     status: string;
     created_at: string;
@@ -314,6 +315,18 @@ export const OrderDetailPage: React.FC = () => {
                                 </p>
                             </div>
                         </div>
+
+                        {order.branch && (
+                            <div className="flex items-center gap-3">
+                                <div className="w-9 h-9 rounded-xl bg-slate-50 flex items-center justify-center">
+                                    <MapPin className="w-4 h-4 text-slate-400" />
+                                </div>
+                                <div>
+                                    <p className="text-xs text-slate-400">الفرع</p>
+                                    <p className="text-sm font-bold text-slate-700">{order.branch}</p>
+                                </div>
+                            </div>
+                        )}
 
                         {order.address && (
                             <div className="flex items-center gap-3">

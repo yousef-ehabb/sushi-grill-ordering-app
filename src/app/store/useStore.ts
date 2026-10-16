@@ -6,12 +6,18 @@ import { db, isFirebaseConfigured } from '../../lib/firebase';
 import { getStorage } from 'firebase/storage';
 import { toast } from 'sonner';
 import { broadcastSyncEvent } from '../utils/realtimeSync';
+import { computeOptionsPrice } from '../utils/price';
 import {
   categoriesService,
   productsService,
   settingsService,
   ordersService,
 } from '../../services/firestore';
+import {
+  isBranchOpen,
+  getBranchClosedMessage,
+  isProductAvailableInBranch,
+} from '../utils/branchAvailability';
 import {
   INITIAL_CATEGORIES,
   INITIAL_PRODUCTS,
@@ -38,6 +44,7 @@ export type Product = {
   price: number;
   image_url: string;
   is_available: boolean;
+  branch_availability?: Record<string, boolean>;
   is_best_seller?: boolean;
   is_chef_pick?: boolean;
   badge?: string;
@@ -51,6 +58,7 @@ export type ProductOption = {
   name_ar: string;
   price_delta: number;
   is_active: boolean;
+  branch_availability?: Record<string, boolean>;
   sort_order: number;
 };
 
@@ -83,6 +91,7 @@ export type Order = {
   address?: string;
   user_id?: string;
   type: 'pickup' | 'delivery';
+  branch?: string;
   items: OrderItem[];
   total: number;
   status: OrderStatus;
@@ -99,10 +108,21 @@ export type OrderItem = {
   selected_option_ids?: string[];
 };
 
+export type BranchOperationalStatus = {
+  is_open: boolean;
+  closed_message: string;
+};
+
 export type GlobalSettings = {
   id: string;
   is_website_open: boolean;
   closed_message: string;
+  branches?: {
+    'فرع الاستاد'?: BranchOperationalStatus;
+    'فرع الكرفان'?: BranchOperationalStatus;
+    [branchName: string]: BranchOperationalStatus | undefined;
+  };
+  created_at?: string;
   updated_at?: string;
 };
 
@@ -173,9 +193,11 @@ interface AppState {
   deleteOption: (optionId: string) => Promise<void>;
 
   // Operational Control Actions
-  updateGlobalSettings: (data: Partial<Pick<GlobalSettings, 'is_website_open' | 'closed_message'>>) => Promise<void>;
+  updateGlobalSettings: (data: Partial<Pick<GlobalSettings, 'is_website_open' | 'closed_message' | 'branches'>>) => Promise<void>;
+  updateBranchStatus: (branch: string, status: Partial<BranchOperationalStatus>) => Promise<void>;
   toggleCategoryActive: (categoryId: string) => Promise<void>;
   updateBusinessRule: (categoryId: string, minQuantity: number) => Promise<void>;
+  toggleProductBranchAvailability: (productId: string, branch: string) => Promise<void>;
 }
 
 export const useStore = create<AppState>()(
@@ -215,13 +237,20 @@ export const useStore = create<AppState>()(
       // ── Real-Time Sync Setters ──────────────────────────────
 
       setProducts: (products: Product[]) => {
+        if (!products || products.length === 0) return;
+
         const currentCart = get().cart;
+        if (currentCart.length === 0) {
+          set({ products });
+          return;
+        }
+
         const unavailableInCart: CartItem[] = [];
         const validCart: CartItem[] = [];
 
         for (const item of currentCart) {
           const matched = products.find((p) => p.id === item.id);
-          if (matched && !matched.is_available) {
+          if (matched && matched.is_available === false) {
             unavailableInCart.push(item);
           } else {
             validCart.push(item);
@@ -366,12 +395,12 @@ export const useStore = create<AppState>()(
       addToCart: (product) =>
         set((state) => {
           // Guard: website closed
-          if (state.globalSettings && !state.globalSettings.is_website_open) return state;
+          if (state.globalSettings && state.globalSettings.is_website_open === false) return state;
           // Guard: category inactive
           const category = state.categories.find(c => c.id === product.category_id);
-          if (category && !category.is_active) return state;
+          if (category && category.is_active === false) return state;
           // Guard: product unavailable
-          if (!product.is_available) return state;
+          if (product.is_available === false) return state;
 
           const cartKey = product.id;
           const existing = state.cart.find((item) => item.cartKey === cartKey);
@@ -390,12 +419,12 @@ export const useStore = create<AppState>()(
       addToCartWithDetails: (product, quantity, specialInstructions, selectedOptionIds) =>
         set((state) => {
           // Guard: website closed
-          if (state.globalSettings && !state.globalSettings.is_website_open) return state;
+          if (state.globalSettings && state.globalSettings.is_website_open === false) return state;
           // Guard: category inactive
           const category = state.categories.find(c => c.id === product.category_id);
-          if (category && !category.is_active) return state;
+          if (category && category.is_active === false) return state;
           // Guard: product unavailable
-          if (!product.is_available) return state;
+          if (product.is_available === false) return state;
 
           const trimmedNote = specialInstructions?.trim().slice(0, 200) || undefined;
           const sortedOptions = selectedOptionIds?.slice().sort() || [];
@@ -467,6 +496,13 @@ export const useStore = create<AppState>()(
             return null;
           }
 
+          // Branch closed validation
+          if (orderData.branch && !isBranchOpen(freshSettings, orderData.branch)) {
+            const errorMsg = getBranchClosedMessage(freshSettings, orderData.branch) || `${orderData.branch} مغلق حالياً ولا يستقبل طلبات جديدة.`;
+            set({ loading: false, error: errorMsg });
+            return null;
+          }
+
           // ── Strict Pre-Checkout Validation 2: Fresh Product Availability ──
           let freshProducts = get().products;
           if (isFirebaseConfigured() && db) {
@@ -481,18 +517,20 @@ export const useStore = create<AppState>()(
           const unavailableItems: string[] = [];
           for (const item of orderData.items) {
             const prod = freshProducts.find((p) => p.id === item.id);
-            if (!prod || !prod.is_available) {
+            if (!prod || !prod.is_available || (orderData.branch && !isProductAvailableInBranch(prod, orderData.branch))) {
               unavailableItems.push(item.name_ar);
             }
           }
 
           if (unavailableItems.length > 0) {
-            // Remove unavailable items from the cart automatically
+            // Remove globally unavailable items from the cart automatically
             const cleanedCart = get().cart.filter((cartItem) => {
               const prod = freshProducts.find((p) => p.id === cartItem.id);
               return prod && prod.is_available;
             });
-            const errorMsg = `عذراً، الصنف "${unavailableItems.join('، ')}" أصبح غير متاح حالياً وتم تعديل سلتك.`;
+            const errorMsg = orderData.branch
+              ? `عذراً، الصنف "${unavailableItems.join('، ')}" غير متاح حالياً في ${orderData.branch}.`
+              : `عذراً، الصنف "${unavailableItems.join('، ')}" أصبح غير متاح حالياً وتم تعديل سلتك.`;
             set({ cart: cleanedCart, loading: false, error: errorMsg });
             return null;
           }
@@ -513,6 +551,7 @@ export const useStore = create<AppState>()(
             address: orderData.address,
             user_id: orderData.user_id,
             type: orderData.type,
+            branch: orderData.branch,
             total: clientComputedTotal,
             status: 'new',
             items: orderData.items.map((item) => ({
@@ -700,6 +739,40 @@ export const useStore = create<AppState>()(
           console.error('Failed to update global settings:', error);
           set({ globalSettings: current }); // Rollback
         }
+      },
+
+      updateBranchStatus: async (branch, status) => {
+        const current = get().globalSettings;
+        if (!current) return;
+
+        const existingBranch = current.branches?.[branch] || {
+          is_open: true,
+          closed_message: `${branch} مغلق حالياً، نسعد باستقبال طلباتكم في أوقات العمل القادمة.`,
+        };
+
+        const updatedBranches = {
+          ...(current.branches || {}),
+          [branch]: {
+            ...existingBranch,
+            ...status,
+          },
+        };
+
+        await get().updateGlobalSettings({ branches: updatedBranches });
+      },
+
+      toggleProductBranchAvailability: async (productId, branch) => {
+        const product = get().products.find(p => p.id === productId);
+        if (!product) return;
+
+        const isCurrentBranchAvailable = isProductAvailableInBranch(product, branch);
+
+        const nextBranchMap = {
+          ...(product.branch_availability || {}),
+          [branch]: !isCurrentBranchAvailable,
+        };
+
+        await get().updateProduct(productId, { branch_availability: nextBranchMap });
       },
 
       toggleCategoryActive: async (categoryId) => {
