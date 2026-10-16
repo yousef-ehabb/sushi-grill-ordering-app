@@ -66,20 +66,39 @@ export const seedService = {
         }
       }
 
-      // 5. Option Groups & Options
-      if (seedData.option_groups) {
-        for (const grp of seedData.option_groups) {
-          const grpRef = doc(db, 'option_groups', grp.id);
-          await setDoc(grpRef, grp, { merge: true });
-          counts.option_groups++;
-        }
-      }
+      // 5. Option Groups & Options (from products catalog)
+      if (seedData.products) {
+        for (const prod of seedData.products) {
+          if (Array.isArray(prod.option_groups)) {
+            for (const grp of prod.option_groups) {
+              const grpRef = doc(db, 'option_groups', grp.id);
+              await setDoc(grpRef, {
+                id: grp.id,
+                product_id: prod.id,
+                name_ar: grp.title_ar,
+                min_select: grp.min_select,
+                max_select: grp.max_select,
+                is_active: true,
+                sort_order: 0,
+              }, { merge: true });
+              counts.option_groups++;
 
-      if (seedData.options) {
-        for (const opt of seedData.options) {
-          const optRef = doc(db, 'options', opt.id);
-          await setDoc(optRef, opt, { merge: true });
-          counts.options++;
+              if (Array.isArray(grp.options)) {
+                for (const opt of grp.options) {
+                  const optRef = doc(db, 'options', opt.id);
+                  await setDoc(optRef, {
+                    id: opt.id,
+                    group_id: grp.id,
+                    name_ar: opt.name_ar,
+                    price_delta: opt.price_delta,
+                    is_active: true,
+                    sort_order: 0,
+                  }, { merge: true });
+                  counts.options++;
+                }
+              }
+            }
+          }
         }
       }
 

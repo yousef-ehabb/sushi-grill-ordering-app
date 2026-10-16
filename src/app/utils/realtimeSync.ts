@@ -1,10 +1,12 @@
 import type { Product, GlobalSettings } from '../store/useStore';
 
-export type SyncEvent =
-  | { type: 'PRODUCT_AVAILABILITY_CHANGED'; productId: string; is_available: boolean; timestamp: number }
-  | { type: 'PRODUCT_UPDATED'; productId: string; data: Partial<Product>; timestamp: number }
-  | { type: 'GLOBAL_SETTINGS_CHANGED'; settings: Partial<GlobalSettings>; timestamp: number }
-  | { type: 'FORCE_REFRESH'; timestamp: number };
+export type SyncEventInput =
+  | { type: 'PRODUCT_AVAILABILITY_CHANGED'; productId: string; is_available: boolean }
+  | { type: 'PRODUCT_UPDATED'; productId: string; data: Partial<Product> }
+  | { type: 'GLOBAL_SETTINGS_CHANGED'; settings: Partial<GlobalSettings> }
+  | { type: 'FORCE_REFRESH' };
+
+export type SyncEvent = SyncEventInput & { timestamp: number };
 
 const CHANNEL_NAME = 'sushi_grill_live_sync';
 const STORAGE_KEY = 'sushi_grill_sync_event';
@@ -21,7 +23,7 @@ if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
 /**
  * Broadcast an event to all other tabs/windows in the same browser
  */
-export function broadcastSyncEvent(event: Omit<SyncEvent, 'timestamp'>): void {
+export function broadcastSyncEvent(event: SyncEventInput): void {
   const fullEvent: SyncEvent = {
     ...event,
     timestamp: Date.now(),

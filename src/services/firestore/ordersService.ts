@@ -12,56 +12,93 @@ import {
   serverTimestamp,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { db, isFirebaseConfigured } from '../../lib/firebase';
+import { auth, db, isFirebaseConfigured } from '../../lib/firebase';
 import type { Order, OrderStatus } from '../../app/store/useStore';
 
 const ORDERS_COLLECTION = 'orders';
 
 export const ordersService = {
   /**
-   * Create a new order in Firestore
+   * Create a new order via trusted server-authoritative API with atomic idempotency
    */
-  async createOrder(orderData: Omit<Order, 'id' | 'created_at'>): Promise<string> {
+  async createOrder(
+    orderData: Omit<Order, 'id' | 'created_at'> & {
+      idempotency_key?: string;
+      raw_items?: any[];
+      subtotal?: number;
+      delivery_fee?: number;
+    }
+  ): Promise<string> {
     if (!isFirebaseConfigured() || !db) {
-      // Mock mode: generate local ID
       const mockId = 'ord_' + Math.random().toString(36).substring(2, 9);
       console.info('[Mock] Order created locally:', mockId);
       return mockId;
     }
 
+    const rawCartItems = (orderData.raw_items && orderData.raw_items.length > 0)
+      ? orderData.raw_items
+      : (orderData.items || []).map((item) => ({
+          id: item.product_id || '',
+          quantity: item.quantity,
+          selectedOptionIds: item.selected_option_ids || [],
+          specialInstructions: item.special_instructions || '',
+        }));
+
+    const serverItems = rawCartItems.map((item: any) => ({
+      product_id: item.id || item.product_id,
+      quantity: Number(item.quantity) || 1,
+      selected_option_ids: Array.isArray(item.selectedOptionIds) ? item.selectedOptionIds : (item.selected_option_ids || []),
+      special_instructions: item.specialInstructions || item.special_instructions || '',
+    }));
+
+    let idToken: string | null = null;
+    if (auth && auth.currentUser) {
+      try {
+        idToken = await auth.currentUser.getIdToken();
+      } catch (tokenErr) {
+        console.warn('[OrdersService] Error getting auth token:', tokenErr);
+      }
+    }
+
+    const response = await fetch('/api/orders/create', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(idToken ? { 'Authorization': `Bearer ${idToken}` } : {}),
+      },
+      body: JSON.stringify({
+        customer_name: orderData.customer_name,
+        customer_phone: orderData.customer_phone,
+        address: orderData.address,
+        type: orderData.type,
+        branch: orderData.branch,
+        items: serverItems,
+        idempotency_key: orderData.idempotency_key,
+      }),
+    });
+
+    const data = await response.json().catch(() => null);
+
+    if (!response.ok || !data?.success) {
+      const errorMsg = data?.error || 'فشل إنشاء الطلب في الخادم، يرجى المحاولة مرة أخرى.';
+      throw new Error(errorMsg);
+    }
+
+    return data.orderId;
+  },
+
+  /**
+   * Track order for guests securely through the server endpoint
+   */
+  async trackGuestOrder(orderId: string, phone: string): Promise<Order | null> {
     try {
-      const ordersRef = collection(db, ORDERS_COLLECTION);
-      const newOrderDoc = doc(ordersRef);
-
-      // Cleanly sanitize payload to prevent Firestore undefined errors
-      const orderPayload: Record<string, any> = {
-        id: newOrderDoc.id,
-        customer_name: orderData.customer_name?.trim() || 'عميل بوشنكي',
-        customer_phone: orderData.customer_phone?.trim() || '',
-        address: orderData.address?.trim() || '',
-        user_id: orderData.user_id || null,
-        type: orderData.type || 'pickup',
-        branch: orderData.branch?.trim() || '',
-        total: Number(orderData.total) || 0,
-        status: 'new' as OrderStatus,
-        created_at: new Date().toISOString(),
-        server_timestamp: serverTimestamp(),
-        items: (orderData.items || []).map((item) => ({
-          id: item.id || 'item_' + Math.random().toString(36).substring(2, 7),
-          product_id: item.product_id || '',
-          name_ar: item.name_ar || '',
-          quantity: Number(item.quantity) || 1,
-          unit_price: Number(item.unit_price) || 0,
-          selected_option_ids: Array.isArray(item.selected_option_ids) ? item.selected_option_ids : [],
-          special_instructions: item.special_instructions || '',
-        })),
-      };
-
-      await setDoc(newOrderDoc, orderPayload);
-      return newOrderDoc.id;
-    } catch (error) {
-      console.error('[Firestore] Error creating order:', error);
-      throw error;
+      const res = await fetch(`/api/orders/track?orderId=${encodeURIComponent(orderId)}&phone=${encodeURIComponent(phone)}`);
+      const data = await res.json();
+      if (!res.ok || !data?.success) return null;
+      return data.order;
+    } catch (err) {
+      console.error('[OrdersService] Error tracking guest order:', err);
+      return null;
     }
   },
 
@@ -96,6 +133,31 @@ export const ordersService = {
         console.error('[Firestore] Error fetching all orders fallback:', fallbackError);
         return [];
       }
+    }
+  },
+
+  /**
+   * Fetch orders for a specific authenticated user (complies with security rules)
+   */
+  async getUserOrders(userId: string): Promise<Order[]> {
+    if (!isFirebaseConfigured() || !db || !userId) {
+      return [];
+    }
+
+    try {
+      const q = query(
+        collection(db, ORDERS_COLLECTION),
+        where('user_id', '==', userId)
+      );
+      const snapshot = await getDocs(q);
+      const orders = snapshot.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...(docSnap.data() as Omit<Order, 'id'>),
+      }));
+      return orders.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    } catch (error) {
+      console.warn('[Firestore] Error fetching user orders:', error);
+      return [];
     }
   },
 
