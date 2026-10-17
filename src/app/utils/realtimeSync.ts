@@ -5,6 +5,8 @@ export type SyncEventInput =
   | { type: 'PRODUCT_UPDATED'; productId: string; data: Partial<Product> }
   | { type: 'GLOBAL_SETTINGS_CHANGED'; settings: Partial<GlobalSettings> }
   | { type: 'ORDER_EVENT_NOTIFICATION'; orderId: string; action: 'created' | 'status_changed' }
+  | { type: 'ORDER_CREATED'; order: any }
+  | { type: 'ORDER_STATUS_CHANGED'; orderId: string; status: any }
   | { type: 'FORCE_REFRESH' };
 
 export type SyncEvent = SyncEventInput & { timestamp: number };

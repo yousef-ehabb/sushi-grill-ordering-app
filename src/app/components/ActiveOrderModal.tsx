@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { X, Clock, Truck, Store, ChefHat, Package, CircleDot, Loader2, UtensilsCrossed, Search, AlertCircle, RefreshCw, Copy, Check } from 'lucide-react';
+import { X, Clock, Truck, Store, ChefHat, Package, CircleDot, Loader2, UtensilsCrossed, Search, AlertCircle, RefreshCw, Copy, Check, XCircle, Ban } from 'lucide-react';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
 import { doc, getDoc } from 'firebase/firestore';
@@ -8,6 +8,8 @@ import { useAuthStore } from '../store/useAuthStore';
 import { ordersService } from '../../services/firestore';
 import type { OrderItem, OrderStatus } from '../store/useStore';
 import { resolveAllOptionNames } from '../utils/optionNames';
+import { getDisplayOrderId, isCancellable } from '../utils/orderUtils';
+import { broadcastSyncEvent } from '../utils/realtimeSync';
 
 interface ActiveOrderData {
     id: string;
@@ -76,6 +78,7 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
     const [manualOrderId, setManualOrderId] = useState('');
     const [manualPhone, setManualPhone] = useState('');
     const [isSearchingGuest, setIsSearchingGuest] = useState(false);
+    const [isCancelling, setIsCancelling] = useState(false);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -201,6 +204,27 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
         fetchGuestOrder(manualOrderId.trim(), manualPhone.trim());
     };
 
+    const handleCancelOrder = async () => {
+        if (!order || !isCancellable(order.status)) return;
+        if (!window.confirm('هل أنت متأكد من إلغاء هذا الطلب؟')) return;
+
+        setIsCancelling(true);
+        try {
+            await ordersService.updateOrderStatus(order.id, 'cancelled');
+            setOrder({ ...order, status: 'cancelled' });
+            broadcastSyncEvent({
+                type: 'ORDER_STATUS_CHANGED',
+                orderId: order.id,
+                status: 'cancelled',
+            });
+            toast.success('تم إلغاء الطلب بنجاح');
+        } catch {
+            toast.error('تعذر إلغاء الطلب. يرجى المحاولة مرة أخرى.');
+        } finally {
+            setIsCancelling(false);
+        }
+    };
+
     const steps = order ? getSteps(order.type) : [];
     const activeStepIndex = order ? resolveStepIndex(steps, order.status, order.type) : -1;
     const hasOrder = !!order;
@@ -237,7 +261,7 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
                                 {order && (
                                     <div className="flex items-center gap-2 mt-1">
                                         <span className="text-sm font-black text-primary font-mono bg-red-50 px-2 py-0.5 rounded-lg border border-red-100">
-                                            رقم الطلب: #{order.order_number || order.id.slice(0, 10).toUpperCase()}
+                                            رقم الطلب: {getDisplayOrderId(order as any)}
                                         </span>
                                         <button
                                             type="button"
@@ -289,7 +313,19 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
                                 </div>
                             ) : hasOrder ? (
                                 <>
-                                    {/* Status Timeline */}
+                                    {/* Cancelled State Banner */}
+                                    {order.status === 'cancelled' && (
+                                        <div className="bg-red-50 border border-red-200 rounded-2xl p-5 text-center space-y-2">
+                                            <div className="w-12 h-12 rounded-full bg-red-100 text-red-600 mx-auto flex items-center justify-center">
+                                                <Ban className="w-6 h-6" />
+                                            </div>
+                                            <h3 className="text-base font-black text-red-700">تم إلغاء الطلب</h3>
+                                            <p className="text-xs text-red-500">تم إلغاء هذا الطلب ولن تتم معالجته</p>
+                                        </div>
+                                    )}
+
+                                    {/* Status Timeline (only when not cancelled/completed) */}
+                                    {order.status !== 'cancelled' && order.status !== 'completed' && (
                                     <div className="flex items-center justify-between">
                                         {steps.map((step, i) => {
                                             const Icon = step.icon;
@@ -314,6 +350,17 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
                                             );
                                         })}
                                     </div>
+                                    )}
+
+                                    {/* Completed State */}
+                                    {order.status === 'completed' && (
+                                        <div className="bg-green-50 border border-green-200 rounded-2xl p-5 text-center space-y-2">
+                                            <div className="w-12 h-12 rounded-full bg-green-100 text-green-600 mx-auto flex items-center justify-center">
+                                                <Check className="w-6 h-6" />
+                                            </div>
+                                            <h3 className="text-base font-black text-green-700">تم تسليم الطلب بنجاح</h3>
+                                        </div>
+                                    )}
 
                                     {/* Order Type + Branch + Time */}
                                     <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500 bg-slate-50 p-3 rounded-xl border border-slate-100">
@@ -391,6 +438,30 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
                                             </span>
                                         </div>
                                     </div>
+
+                                    {/* Cancel Button (only for new orders) */}
+                                    {isCancellable(order.status) && (
+                                        <div className="pt-3 border-t border-slate-100">
+                                            <button
+                                                onClick={handleCancelOrder}
+                                                disabled={isCancelling}
+                                                className="w-full py-2.5 bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 font-bold rounded-xl text-sm transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
+                                            >
+                                                {isCancelling ? (
+                                                    <><Loader2 className="w-4 h-4 animate-spin" /> جاري الإلغاء...</>
+                                                ) : (
+                                                    <><XCircle className="w-4 h-4" /> إلغاء الطلب</>
+                                                )}
+                                            </button>
+                                        </div>
+                                    )}
+
+                                    {/* Helper note when cancellation is no longer possible */}
+                                    {(order.status === 'preparing' || order.status === 'ready' || order.status === 'out_for_delivery') && (
+                                        <p className="text-[11px] text-slate-400 text-center pt-2 border-t border-slate-100">
+                                            لا يمكن إلغاء الطلب لأنه قيد التحضير حالياً
+                                        </p>
+                                    )}
                                 </>
                             ) : (
                                 /* Guest Search Form / Empty State */

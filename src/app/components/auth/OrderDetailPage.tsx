@@ -8,9 +8,11 @@ import { motion } from 'motion/react';
 import { doc, getDoc } from 'firebase/firestore';
 import { db, isFirebaseConfigured } from '../../../lib/firebase';
 import { resolveAllOptionNames } from '../../utils/optionNames';
+import { getDisplayOrderId } from '../../utils/orderUtils';
 
 interface OrderDetail {
     id: string;
+    order_number?: number;
     customer_name: string;
     customer_phone: string;
     address?: string;
@@ -161,7 +163,7 @@ export const OrderDetailPage: React.FC = () => {
                             تفاصيل الطلب
                         </h1>
                         <p className="text-xs font-mono text-slate-400">
-                            #{order.id.slice(0, 8).toUpperCase()}
+                            {getDisplayOrderId(order)}
                         </p>
                     </div>
                 </div>

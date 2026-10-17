@@ -2,7 +2,14 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore, OrderStatus, Product } from '../store/useStore';
 import { useAuthStore } from '../store/useAuthStore';
-import { ordersService, productsService, settingsService } from '../../services/firestore';
+import {
+  ordersService,
+  productsService,
+  settingsService,
+  getStoredOrders,
+  mergeOrders,
+  saveOrdersToCache,
+} from '../../services/firestore';
 import { ProductEditModal } from './ProductEditModal';
 import {
   Package,
@@ -39,13 +46,18 @@ import {
   Truck,
   Store,
   Maximize2,
-  Minimize2
+  Minimize2,
+  Printer
 } from 'lucide-react';
 import { resolveAllOptionNames } from '../utils/optionNames';
+import { getDisplayOrderId, isCancellable } from '../utils/orderUtils';
+import { printOrderReceipt } from '../utils/receiptPrinter';
 import { clsx } from 'clsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { Toaster, toast } from 'sonner';
 import { isProductAvailableInBranch, isBranchOpen } from '../utils/branchAvailability';
+import { useOrderNotifications } from '../hooks/useOrderNotifications';
+import { NotificationSoundWidget } from './NotificationSoundWidget';
 
 export const AdminView: React.FC = () => {
   const {
@@ -70,6 +82,16 @@ export const AdminView: React.FC = () => {
   const [orderStatusFilter, setOrderStatusFilter] = useState<'all' | OrderStatus>('all');
   const [selectedBranchFilter, setSelectedBranchFilter] = useState<'all' | 'فرع الاستاد' | 'فرع الكرفان'>('all');
   const [collapsedOrderIds, setCollapsedOrderIds] = useState<Set<string>>(new Set());
+
+  // ── Real-time new order notifications ──
+  const {
+    isMuted: isNotificationMuted,
+    toggleMute: toggleNotificationMute,
+    selectedTone: notificationTone,
+    selectTone: selectNotificationTone,
+    playTone: playNotificationTone,
+    newOrderIds,
+  } = useOrderNotifications(orders, adminBranchScope, selectedBranchFilter);
 
   // Branch-Scoped Orders based on logged-in admin
   const branchScopedOrders = useMemo(() => {
@@ -96,6 +118,17 @@ export const AdminView: React.FC = () => {
 
   const expandAllOrders = () => {
     setCollapsedOrderIds(new Set());
+  };
+
+  const handlePrintReceipt = (order: any) => {
+    printOrderReceipt(order, optionNames);
+    toast.success(`جاري طباعة إيصال طلب ${getDisplayOrderId(order)} 🖨️`);
+  };
+
+  const handleStartPreparation = (order: any) => {
+    updateOrderStatus(order.id, 'preparing');
+    printOrderReceipt(order, optionNames);
+    toast.success(`تم بدء تحضير طلب ${getDisplayOrderId(order)} وجاري طباعة الفاتورة 🖨️`);
   };
 
   const orderCounts = useMemo(() => {
@@ -159,7 +192,7 @@ export const AdminView: React.FC = () => {
           fetchGlobalSettings(), fetchBusinessRules()
         ]);
       } catch (err) {
-        console.warn('[AdminView] Error loading fresh data:', err);
+        console.warn('[AdminView] Error loading fresh data, retaining cached state:', err);
       } finally {
         setIsLoading(false);
       }
@@ -167,9 +200,21 @@ export const AdminView: React.FC = () => {
     loadData();
 
     // Subscribe to real-time updates (orders, products, settings)
-    const unsubscribeOrders = ordersService.subscribeToAllOrders((liveOrders) => {
-      useStore.setState({ orders: liveOrders });
-    }, adminBranchScope);
+    const unsubscribeOrders = ordersService.subscribeToAllOrders(
+      (liveOrders) => {
+        if (liveOrders && liveOrders.length > 0) {
+          useStore.setState((state) => {
+            const merged = mergeOrders(state.orders, liveOrders);
+            saveOrdersToCache(merged);
+            return { orders: merged };
+          });
+        }
+      },
+      adminBranchScope,
+      (err) => {
+        console.warn('[AdminView] Realtime orders stream error, retained cached orders:', err);
+      }
+    );
     const unsubscribeProducts = productsService.subscribeToProducts((liveProducts) => {
       useStore.getState().setProducts(liveProducts);
     });
@@ -460,7 +505,7 @@ export const AdminView: React.FC = () => {
       toast.success('تم تحديث البيانات بنجاح');
     } catch (err) {
       console.warn('Error refreshing admin data:', err);
-      toast.error('تعذر جلب بعض البيانات، يرجى المحاولة مرة أخرى');
+      toast.error('تعذر جلب بعض البيانات، تم الإبقاء على البيانات المحفوظة');
     } finally {
       setIsRefreshing(false);
     }
@@ -822,7 +867,12 @@ export const AdminView: React.FC = () => {
                       <motion.div
                         layout
                         key={order.id}
-                        className="bg-white rounded-2xl p-3.5 shadow-sm border border-slate-100 hover:border-slate-200 transition-all flex flex-col justify-between"
+                        className={clsx(
+                          "bg-white rounded-2xl p-3.5 shadow-sm border hover:border-slate-200 transition-all flex flex-col justify-between",
+                          newOrderIds.has(order.id)
+                            ? "border-red-300 ring-2 ring-red-200/60 animate-pulse"
+                            : "border-slate-100"
+                        )}
                       >
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2 min-w-0">
@@ -834,7 +884,7 @@ export const AdminView: React.FC = () => {
                               <ChevronDown className="w-4 h-4" />
                             </button>
                             <span className="text-xs font-black text-slate-900 shrink-0">
-                              #{order.id.slice(0, 8).toUpperCase()}
+                              {getDisplayOrderId(order)}
                             </span>
                             <span className={clsx("px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0", statusColors[order.status])}>
                               {statusLabels[order.status]}
@@ -866,12 +916,26 @@ export const AdminView: React.FC = () => {
                           <span className="text-slate-500 font-medium">
                             {totalItemsCount} {totalItemsCount === 1 ? 'صنف' : 'أصناف'}
                           </span>
-                          <button
-                            onClick={() => toggleOrderCollapse(order.id)}
-                            className="text-primary hover:underline text-[11px] font-bold cursor-pointer"
-                          >
-                            عرض التفاصيل
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handlePrintReceipt(order);
+                              }}
+                              className="p-1 hover:bg-slate-100 rounded text-slate-500 hover:text-slate-800 transition-all flex items-center gap-1 text-[11px] font-bold cursor-pointer"
+                              title="طباعة إيصال الفاتورة"
+                            >
+                              <Printer className="w-3.5 h-3.5" />
+                              <span>طباعة</span>
+                            </button>
+                            <button
+                              onClick={() => toggleOrderCollapse(order.id)}
+                              className="text-primary hover:underline text-[11px] font-bold cursor-pointer"
+                            >
+                              عرض التفاصيل
+                            </button>
+                          </div>
                         </div>
                       </motion.div>
                     );
@@ -882,7 +946,12 @@ export const AdminView: React.FC = () => {
                     <motion.div
                       layout
                       key={order.id}
-                      className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 hover:border-slate-200 hover:shadow-md transition-all flex flex-col justify-between h-full group"
+                      className={clsx(
+                        "bg-white rounded-2xl p-4 shadow-sm border hover:border-slate-200 hover:shadow-md transition-all flex flex-col justify-between h-full group",
+                        newOrderIds.has(order.id)
+                          ? "border-red-300 ring-2 ring-red-200/60 animate-pulse"
+                          : "border-slate-100"
+                      )}
                     >
                       {/* Top: Header + Customer Info + Ordered Items */}
                       <div className="space-y-3">
@@ -890,7 +959,7 @@ export const AdminView: React.FC = () => {
                         <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
                           <div className="flex items-center gap-2 min-w-0">
                             <span className="text-sm font-black text-slate-900 tracking-tight shrink-0">
-                              #{order.id.slice(0, 8).toUpperCase()}
+                              {getDisplayOrderId(order)}
                             </span>
                             <span className={clsx("px-2.5 py-0.5 rounded-full text-[11px] font-bold whitespace-nowrap", statusColors[order.status])}>
                               {statusLabels[order.status]}
@@ -905,6 +974,14 @@ export const AdminView: React.FC = () => {
                             <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-medium">
                               كاش
                             </span>
+                            <button
+                              type="button"
+                              onClick={() => handlePrintReceipt(order)}
+                              className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-700 transition-all cursor-pointer"
+                              title="طباعة إيصال الطلب"
+                            >
+                              <Printer className="w-3.5 h-3.5" />
+                            </button>
                             <button
                               onClick={() => toggleOrderCollapse(order.id)}
                               className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-700 transition-all cursor-pointer"
@@ -1016,13 +1093,36 @@ export const AdminView: React.FC = () => {
                         </div>
 
                         <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handlePrintReceipt(order)}
+                            className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-xl font-bold text-xs transition-all flex items-center gap-1.5 cursor-pointer shadow-sm border border-slate-200/60"
+                            title="طباعة إيصال الطلب حرارياً (POS)"
+                          >
+                            <Printer className="w-3.5 h-3.5 text-slate-600" />
+                            <span>طباعة</span>
+                          </button>
+
                           {order.status === 'new' && (
-                            <button
-                              onClick={() => updateOrderStatus(order.id, 'preparing')}
-                              className="bg-primary text-white px-3.5 py-1.5 rounded-xl font-bold text-xs hover:bg-red-700 transition-all shadow-sm shadow-red-100 whitespace-nowrap"
-                            >
-                              بدء التحضير
-                            </button>
+                            <>
+                              <button
+                                onClick={() => {
+                                  if (window.confirm('هل أنت متأكد من إلغاء هذا الطلب؟')) {
+                                    updateOrderStatus(order.id, 'cancelled');
+                                    toast.success('تم إلغاء الطلب بنجاح');
+                                  }
+                                }}
+                                className="bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 px-3 py-1.5 rounded-xl font-bold text-xs transition-all whitespace-nowrap cursor-pointer"
+                              >
+                                إلغاء الطلب
+                              </button>
+                              <button
+                                onClick={() => handleStartPreparation(order)}
+                                className="bg-primary text-white px-3.5 py-1.5 rounded-xl font-bold text-xs hover:bg-red-700 transition-all shadow-sm shadow-red-100 whitespace-nowrap cursor-pointer"
+                              >
+                                بدء التحضير
+                              </button>
+                            </>
                           )}
                           {order.status === 'preparing' && (
                             <button
@@ -2147,6 +2247,14 @@ export const AdminView: React.FC = () => {
           </>
         )}
       </AnimatePresence>
+      {/* ── Floating Notification Sound Widget ── */}
+      <NotificationSoundWidget
+        isMuted={isNotificationMuted}
+        selectedTone={notificationTone}
+        onToggleMute={toggleNotificationMute}
+        onSelectTone={selectNotificationTone}
+        onPlayTone={playNotificationTone}
+      />
     </div>
   );
 };

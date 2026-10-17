@@ -12,6 +12,9 @@ import {
   productsService,
   settingsService,
   ordersService,
+  getStoredOrders,
+  saveOrdersToCache,
+  mergeOrders,
 } from '../../services/firestore';
 import {
   isBranchOpen,
@@ -212,7 +215,7 @@ export const useStore = create<AppState>()(
       optionGroupLoadingByProductId: {},
       allOptionGroups: Object.values(INITIAL_OPTION_GROUPS_BY_PRODUCT).flat(),
       cart: [],
-      orders: [],
+      orders: getStoredOrders(),
       orderType: null,
       loading: false,
       error: null,
@@ -351,30 +354,48 @@ export const useStore = create<AppState>()(
       fetchOrders: async () => {
         try {
           const authUser = auth?.currentUser;
-          if (authUser) {
-            const orders = await ordersService.getUserOrders(authUser.uid);
-            set({ orders });
+          const isAdmin = typeof window !== 'undefined' && Boolean(localStorage.getItem('pochinki_admin_session'));
+
+          let orders: Order[] = [];
+          if (isAdmin) {
+            orders = await ordersService.getAllOrders();
+          } else if (authUser) {
+            orders = await ordersService.getUserOrders(authUser.uid);
           } else {
-            set({ orders: [] });
+            orders = await ordersService.getAllOrders();
+          }
+
+          if (orders && orders.length > 0) {
+            set((state) => {
+              const merged = mergeOrders(state.orders, orders);
+              saveOrdersToCache(merged);
+              return { orders: merged };
+            });
           }
         } catch (error) {
-          console.error('Failed to fetch orders:', error);
+          console.error('Failed to fetch orders, retaining cached orders:', error);
         }
       },
 
       fetchActiveOrder: async () => {
         try {
           const authUser = auth?.currentUser;
-          if (authUser) {
-            const orders = await ordersService.getUserOrders(authUser.uid);
-            const active = orders.find(
-              (o) => o.status !== 'completed' && o.status !== 'cancelled'
-            );
-            if (active) {
-              set({ activeOrder: { id: active.id, status: active.status } });
-            } else {
-              set({ activeOrder: null });
+          const isAdmin = typeof window !== 'undefined' && Boolean(localStorage.getItem('pochinki_admin_session'));
+
+          let orders = get().orders;
+          if (orders.length === 0) {
+            if (isAdmin) {
+              orders = await ordersService.getAllOrders();
+            } else if (authUser) {
+              orders = await ordersService.getUserOrders(authUser.uid);
             }
+          }
+
+          const active = orders.find(
+            (o) => o.status !== 'completed' && o.status !== 'cancelled'
+          );
+          if (active) {
+            set({ activeOrder: { id: active.id, status: active.status } });
           } else {
             set({ activeOrder: null });
           }
@@ -578,14 +599,46 @@ export const useStore = create<AppState>()(
             })),
           });
 
-          set({ loading: false });
-          if (result?.orderId) {
-            broadcastSyncEvent({
-              type: 'ORDER_EVENT_NOTIFICATION',
-              orderId: result.orderId,
-              action: 'created',
-            });
-          }
+          // Optimistically update orders in store with new order so admin/user sees it instantly
+          const newOrder: Order = {
+            id: result.orderId,
+            order_number: result.orderNumber,
+            customer_name: orderData.customer_name,
+            customer_phone: orderData.customer_phone,
+            address: orderData.address,
+            user_id: orderData.user_id,
+            type: orderData.type,
+            branch: orderData.branch,
+            total: orderData.total || 0,
+            status: 'new',
+            created_at: new Date().toISOString(),
+            items: orderData.items.map((item) => ({
+              id: 'item_' + Math.random().toString(36).substring(2, 7),
+              product_id: item.id,
+              name_ar: item.name_ar,
+              quantity: item.quantity,
+              unit_price: (item.price ?? 0) + (item.optionsPrice ?? 0),
+              selected_option_ids: item.selectedOptionIds,
+              special_instructions: item.specialInstructions,
+            })),
+          };
+
+          set((state) => {
+            const updated = [newOrder, ...state.orders.filter((o) => o.id !== result.orderId)];
+            saveOrdersToCache(updated);
+            return { orders: updated, loading: false };
+          });
+
+          broadcastSyncEvent({
+            type: 'ORDER_EVENT_NOTIFICATION',
+            orderId: result.orderId,
+            action: 'created',
+          });
+          broadcastSyncEvent({
+            type: 'ORDER_CREATED',
+            order: newOrder,
+          });
+
           return result;
         } catch (err: any) {
           set({ loading: false, error: err.message || 'فشل إنشاء الطلب' });
@@ -677,11 +730,19 @@ export const useStore = create<AppState>()(
       },
 
       updateOrderStatus: async (orderId, status) => {
-        set((state) => ({
-          orders: state.orders.map((o) =>
+        set((state) => {
+          const updated = state.orders.map((o) =>
             o.id === orderId ? { ...o, status } : o
-          ),
-        }));
+          );
+          saveOrdersToCache(updated);
+          return { orders: updated };
+        });
+
+        broadcastSyncEvent({
+          type: 'ORDER_STATUS_CHANGED',
+          orderId,
+          status,
+        });
 
         try {
           await ordersService.updateOrderStatus(orderId, status);
@@ -1041,6 +1102,7 @@ export const useStore = create<AppState>()(
       partialize: (state) => ({
         cart: state.cart,
         orderType: state.orderType,
+        orders: state.orders,
       }),
     }
   )
