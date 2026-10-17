@@ -186,7 +186,7 @@ export function priceOrderFromCatalog(input: {
         return fail('أحد إضافات الطلب غير مرتبط بمجموعة خيارات');
       }
       const group = optionGroups.get(option.group_id);
-      if (!group || group.is_active === false || group.product_id !== product.id) {
+      if (!group || group.is_active === false || (group.product_id && group.product_id !== product.id && group.product_id !== 'all')) {
         return fail('أحد إضافات الطلب لا ينتمي لهذا الصنف');
       }
       const countKey = `${product.id}:${group.id}`;

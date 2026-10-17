@@ -54,6 +54,11 @@ describe('Server-Authoritative Order Engine', () => {
           price: 30,
           is_available: false,
         },
+        'opt-spicy-sauce': {
+          name_ar: 'صوص حار',
+          price_delta: 10,
+          is_active: true,
+        },
       },
     });
   });
@@ -292,6 +297,32 @@ describe('Server-Authoritative Order Engine', () => {
     expect(res.success).toBe(false);
     expect(res.code).toBe('OPTION_NOT_FOUND');
     expect(res.error).toContain('غير موجودة');
+  });
+
+  it('correctly resolves legacy product-suffixed option IDs and calculates price_delta', async () => {
+    const payload = {
+      customer_name: 'أحمد علي',
+      customer_phone: '01012345678',
+      type: 'pickup' as const,
+      branch: 'فرع الاستاد',
+      items: [
+        {
+          product_id: 'prod_burger',
+          quantity: 1,
+          selected_option_ids: ['opt-hot-prod-akm'], // Legacy suffixed ID
+        },
+      ],
+    };
+
+    const res = await processOrderCreation(db as any, payload, null, mockFieldValue as any);
+    expect(res.success).toBe(true);
+    // Base 100 + price_delta 10 = 110
+    expect(res.subtotal).toBe(110);
+    expect(res.total).toBe(110);
+
+    const order = db.getCollection('orders').get(res.orderId!);
+    expect(order).toBeDefined();
+    expect(order.items[0].selected_option_ids).toEqual(['opt-spicy-sauce']);
   });
 
   describe('Sequential Order Numbers Allocation', () => {

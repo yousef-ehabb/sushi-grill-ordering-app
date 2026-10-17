@@ -88,35 +88,42 @@ export const productsService = {
     }
 
     try {
-      const groupsQuery = query(
-        collection(db, OPTION_GROUPS_COLLECTION),
-        where('product_id', '==', productId),
-        where('is_active', '==', true)
-      );
-      const groupsSnap = await getDocs(groupsQuery);
+      // Fetch all option groups and match those for this specific product or universal ('all' / unassigned)
+      const groupsSnap = await getDocs(collection(db, OPTION_GROUPS_COLLECTION));
 
       if (groupsSnap.empty) {
         return INITIAL_OPTION_GROUPS_BY_PRODUCT[productId] || createOptionGroupsForProduct(productId);
       }
 
+      const matchingGroupDocs = groupsSnap.docs.filter((groupDoc) => {
+        const data = groupDoc.data();
+        if (data.is_active === false) return false;
+        return data.product_id === productId || data.product_id === 'all' || !data.product_id;
+      });
+
+      if (matchingGroupDocs.length === 0) {
+        return INITIAL_OPTION_GROUPS_BY_PRODUCT[productId] || createOptionGroupsForProduct(productId);
+      }
+
       const groups: OptionGroup[] = [];
 
-      for (const groupDoc of groupsSnap.docs) {
+      for (const groupDoc of matchingGroupDocs) {
         const groupData = groupDoc.data() as Omit<OptionGroup, 'id' | 'options'>;
         const groupId = groupDoc.id;
 
-        // Fetch options for this group
+        // Fetch options for this group without composite index requirement
         const optionsQuery = query(
           collection(db, OPTIONS_COLLECTION),
-          where('group_id', '==', groupId),
-          where('is_active', '==', true)
+          where('group_id', '==', groupId)
         );
         const optionsSnap = await getDocs(optionsQuery);
 
-        const options: ProductOption[] = optionsSnap.docs.map((optDoc) => ({
-          id: optDoc.id,
-          ...(optDoc.data() as Omit<ProductOption, 'id'>),
-        }));
+        const options: ProductOption[] = optionsSnap.docs
+          .map((optDoc) => ({
+            id: optDoc.id,
+            ...(optDoc.data() as Omit<ProductOption, 'id'>),
+          }))
+          .filter((opt) => opt.is_active !== false);
 
         // Sort options by sort_order
         options.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
@@ -130,7 +137,7 @@ export const productsService = {
 
       // Sort groups by sort_order
       groups.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-      return groups;
+      return groups.length > 0 ? groups : (INITIAL_OPTION_GROUPS_BY_PRODUCT[productId] || createOptionGroupsForProduct(productId));
     } catch (error) {
       console.warn(`[Firestore] Error fetching option groups for ${productId}:`, error);
       return INITIAL_OPTION_GROUPS_BY_PRODUCT[productId] || createOptionGroupsForProduct(productId);

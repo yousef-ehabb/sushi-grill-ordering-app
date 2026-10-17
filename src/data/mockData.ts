@@ -119,9 +119,9 @@ export const INITIAL_PRODUCTS: Product[] = [
 export const createOptionGroupsForProduct = (productId: string): OptionGroup[] => {
   return [
     {
-      id: `grp-upgrade-${productId}`,
-      product_id: productId,
-      key: 'sandwich_upgrade',
+      id: 'group-upgrade',
+      product_id: 'all',
+      key: 'upgrade',
       name_ar: 'ترقية الساندوتش',
       min_select: 0,
       max_select: 1,
@@ -129,8 +129,8 @@ export const createOptionGroupsForProduct = (productId: string): OptionGroup[] =
       sort_order: 1,
       options: [
         {
-          id: `opt-extra-fries-${productId}`,
-          group_id: `grp-upgrade-${productId}`,
+          id: 'opt-extra-fries-sauce',
+          group_id: 'group-upgrade',
           name_ar: 'إكسترا بطاطس + صوص',
           price_delta: 30,
           is_active: true,
@@ -139,9 +139,9 @@ export const createOptionGroupsForProduct = (productId: string): OptionGroup[] =
       ],
     },
     {
-      id: `grp-sauces-${productId}`,
-      product_id: productId,
-      key: 'extra_sauces',
+      id: 'group-sauces',
+      product_id: 'all',
+      key: 'sauces',
       name_ar: 'إضافات الصوصات',
       min_select: 0,
       max_select: 4,
@@ -149,32 +149,32 @@ export const createOptionGroupsForProduct = (productId: string): OptionGroup[] =
       sort_order: 2,
       options: [
         {
-          id: `opt-hot-${productId}`,
-          group_id: `grp-sauces-${productId}`,
+          id: 'opt-spicy-sauce',
+          group_id: 'group-sauces',
           name_ar: 'صوص حار',
           price_delta: 10,
           is_active: true,
           sort_order: 1,
         },
         {
-          id: `opt-ranch-${productId}`,
-          group_id: `grp-sauces-${productId}`,
+          id: 'opt-ranch-sauce',
+          group_id: 'group-sauces',
           name_ar: 'صوص رانش',
           price_delta: 10,
           is_active: true,
           sort_order: 2,
         },
         {
-          id: `opt-texas-${productId}`,
-          group_id: `grp-sauces-${productId}`,
+          id: 'opt-texas-sauce',
+          group_id: 'group-sauces',
           name_ar: 'صوص تكساس',
           price_delta: 20,
           is_active: true,
           sort_order: 3,
         },
         {
-          id: `opt-cheddar-${productId}`,
-          group_id: `grp-sauces-${productId}`,
+          id: 'opt-cheddar-sauce',
+          group_id: 'group-sauces',
           name_ar: 'صوص شيدر',
           price_delta: 20,
           is_active: true,

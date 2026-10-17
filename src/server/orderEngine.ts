@@ -174,16 +174,48 @@ export async function processOrderCreation(
       return { success: false, error: 'تجاوزت الحد الأقصى للإضافات للصنف الواحد', code: 'TOO_MANY_OPTIONS' };
     }
 
-    for (const optId of selectedOptionIds) {
-      const optDoc = await db.collection('options').doc(optId).get();
+    const resolvedOptionIds: string[] = [];
+    for (const rawOptId of selectedOptionIds) {
+      let optId = rawOptId;
+      let optDoc = await db.collection('options').doc(optId).get();
+
+      // Backward-compatible aliasing for legacy / product-suffixed option IDs (e.g. opt-hot-prod-akm)
+      if (!optDoc.exists) {
+        const legacyPrefixMap: Record<string, string> = {
+          'opt-hot': 'opt-spicy-sauce',
+          'opt-spicy': 'opt-spicy-sauce',
+          'opt-ranch': 'opt-ranch-sauce',
+          'opt-texas': 'opt-texas-sauce',
+          'opt-cheddar': 'opt-cheddar-sauce',
+          'opt-extra-fries': 'opt-extra-fries-sauce',
+        };
+        for (const [prefix, targetId] of Object.entries(legacyPrefixMap)) {
+          if (rawOptId.startsWith(prefix)) {
+            const candidateDoc = await db.collection('options').doc(targetId).get();
+            if (candidateDoc.exists) {
+              optDoc = candidateDoc;
+              optId = targetId;
+              break;
+            }
+          }
+        }
+      }
+
       if (!optDoc.exists) {
         return { success: false, error: `أحد الإضافات المطلوبة غير موجودة في القائمة`, code: 'OPTION_NOT_FOUND' };
       }
+
       const optData = optDoc.data() || {};
-      if (optData.is_available === false) {
+      if (optData.is_available === false || optData.is_active === false) {
         return { success: false, error: `الإضافة "${optData.name_ar || optId}" غير متوفرة حالياً`, code: 'OPTION_UNAVAILABLE' };
       }
-      optionsPriceTotal += Number(optData.price) || 0;
+
+      if (optData.branch_availability && optData.branch_availability[branch] === false) {
+        return { success: false, error: `الإضافة "${optData.name_ar || optId}" غير متاحة في ${branch}`, code: 'OPTION_BRANCH_UNAVAILABLE' };
+      }
+
+      optionsPriceTotal += Number(optData.price_delta ?? optData.price) || 0;
+      resolvedOptionIds.push(optId);
     }
 
     const unitPrice = basePrice + optionsPriceTotal;
@@ -195,7 +227,7 @@ export async function processOrderCreation(
       name_ar: productData.name_ar || '',
       quantity: qty,
       unit_price: unitPrice,
-      selected_option_ids: selectedOptionIds,
+      selected_option_ids: resolvedOptionIds,
       special_instructions: typeof item.special_instructions === 'string'
         ? item.special_instructions.trim().slice(0, 200)
         : '',

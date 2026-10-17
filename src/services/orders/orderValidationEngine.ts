@@ -143,11 +143,33 @@ export async function validateAndRecalculateOrder(
 
       // 3. Verify options and their real prices from options collection
       if (selectedOptionIds.length > 0) {
-        for (const optionId of selectedOptionIds) {
-          const optionDoc = await getDoc(doc(db, 'options', optionId));
+        for (const rawOptionId of selectedOptionIds) {
+          let optId = rawOptionId;
+          let optionDoc = await getDoc(doc(db, 'options', optId));
+          if (!optionDoc.exists()) {
+            const legacyPrefixMap: Record<string, string> = {
+              'opt-hot': 'opt-spicy-sauce',
+              'opt-spicy': 'opt-spicy-sauce',
+              'opt-ranch': 'opt-ranch-sauce',
+              'opt-texas': 'opt-texas-sauce',
+              'opt-cheddar': 'opt-cheddar-sauce',
+              'opt-extra-fries': 'opt-extra-fries-sauce',
+            };
+            for (const [prefix, targetId] of Object.entries(legacyPrefixMap)) {
+              if (rawOptionId.startsWith(prefix)) {
+                const candidateDoc = await getDoc(doc(db, 'options', targetId));
+                if (candidateDoc.exists()) {
+                  optionDoc = candidateDoc;
+                  optId = targetId;
+                  break;
+                }
+              }
+            }
+          }
+
           if (optionDoc.exists()) {
             const optData = optionDoc.data();
-            verifiedOptionsTotal += Number(optData.price) || 0;
+            verifiedOptionsTotal += Number(optData.price_delta ?? optData.price) || 0;
           }
         }
       }
