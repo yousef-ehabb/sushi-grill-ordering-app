@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { doc, getDoc } from 'firebase/firestore';
 import { db, isFirebaseConfigured } from '../../lib/firebase';
 import { useAuthStore } from '../store/useAuthStore';
-import { ordersService, getStoredOrders } from '../../services/firestore';
+import { ordersService } from '../../services/firestore';
 import type { OrderItem, OrderStatus } from '../store/useStore';
 import { resolveAllOptionNames } from '../utils/optionNames';
 import { getDisplayOrderId, isCancellable } from '../utils/orderUtils';
@@ -135,15 +135,33 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
         }
     }, [isOpen, orderId, guestPhone, user]);
 
-    // ── Live Real-Time Subscriptions (Firestore onSnapshot + BroadcastChannel + Storage + 3s Polling) ──
+    // ── Live Real-Time Subscriptions (Firestore onSnapshot + Server Polling + BroadcastChannel fallback) ──
     useEffect(() => {
         if (!isOpen) return;
 
         const targetId = order?.id || orderId;
         if (!targetId) return;
 
-        // 1. Firebase Firestore live onSnapshot subscription
-        const unsubscribeFirestore = ordersService.subscribeToOrder(targetId, (freshOrder) => {
+        // Normalize order ID for matching: strip '#', trim whitespace, compare as string
+        const normalizeId = (id: string | number | null | undefined): string =>
+            String(id ?? '').replace(/^#/, '').trim();
+
+        const normalizedTargetId = normalizeId(targetId);
+        const normalizedOrderNumber = order?.order_number ? normalizeId(order.order_number) : null;
+
+        // Helper: check if an incoming orderId matches the current tracked order
+        const matchesOrder = (incomingId: string | number | null | undefined): boolean => {
+            const normalized = normalizeId(incomingId);
+            if (!normalized) return false;
+            return (
+                normalized === normalizedTargetId ||
+                normalized === normalizeId(order?.id) ||
+                (normalizedOrderNumber !== null && normalized === normalizedOrderNumber)
+            );
+        };
+
+        // ─── 1. Firebase Firestore live onSnapshot subscription (PRIMARY cross-device channel) ───
+        let unsubscribeFirestore = ordersService.subscribeToOrder(targetId, (freshOrder) => {
             if (freshOrder) {
                 setOrder((prev) => {
                     if (!prev) {
@@ -175,32 +193,26 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
             }
         });
 
-        // 2. BroadcastChannel & LocalStorage sync events (0ms cross-tab instant update)
+        // ─── 2. BroadcastChannel & LocalStorage sync (same-browser bonus, NOT cross-device) ───
         const unsubscribeSync = subscribeToSyncEvents((event) => {
             if (event.type === 'ORDER_STATUS_CHANGED') {
                 setOrder((prev) => {
                     if (!prev) return null;
-                    const matches =
-                        event.orderId === prev.id ||
-                        (prev.order_number && String(event.orderId) === String(prev.order_number)) ||
-                        (prev.order_number && event.orderId === `#${prev.order_number}`) ||
-                        getDisplayOrderId(prev as any) === event.orderId;
-
-                    if (matches && prev.status !== event.status) {
+                    if (matchesOrder(event.orderId) && prev.status !== event.status) {
                         return { ...prev, status: event.status };
                     }
                     return prev;
                 });
             } else if (event.type === 'ORDER_EVENT_NOTIFICATION') {
-                if (order?.id && (event.orderId === order.id || String(event.orderId) === String(order.order_number))) {
-                    ordersService.getOrderById(order.id).then((fresh) => {
+                if (matchesOrder(event.orderId)) {
+                    ordersService.getOrderByIdFromServer(targetId).then((fresh) => {
                         if (fresh) setOrder((prev) => (prev ? { ...prev, ...fresh } : null));
                     });
                 }
             }
         });
 
-        // 3. Storage event listener on LocalStorage cache
+        // ─── 3. Storage event listener (same-browser bonus) ───
         const handleStorage = (e: StorageEvent) => {
             if (e.key === 'pochinki_orders_cache' && e.newValue) {
                 try {
@@ -209,10 +221,7 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
                         setOrder((prev) => {
                             if (!prev) return null;
                             const found = cachedList.find(
-                                (o: any) =>
-                                    o.id === prev.id ||
-                                    (prev.order_number && o.order_number === prev.order_number) ||
-                                    (prev.order_number && `#${o.order_number}` === `#${prev.order_number}`)
+                                (o: any) => matchesOrder(o.id) || matchesOrder(o.order_number)
                             );
                             if (found && found.status && found.status !== prev.status) {
                                 return { ...prev, status: found.status };
@@ -227,37 +236,86 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
         };
         window.addEventListener('storage', handleStorage);
 
-        // 4. Lightweight 3-second polling fallback
-        const pollTimer = setInterval(async () => {
+        // ─── 4. Cross-Device Server Polling (2.5s interval, bypasses Firestore local cache) ───
+        const pollFromServer = async () => {
             try {
-                // Check cached orders first
-                const cached = getStoredOrders().find(
-                    (o) =>
-                        (order?.id && o.id === order.id) ||
-                        (order?.order_number && o.order_number === order.order_number)
-                );
-                if (cached && order && cached.status !== order.status) {
-                    setOrder((prev) => (prev ? { ...prev, status: cached.status } : null));
-                }
-
-                // Check Firestore
                 const currentId = order?.id || orderId;
-                if (currentId) {
-                    const fresh = await ordersService.getOrderById(currentId);
-                    if (fresh && order && fresh.status !== order.status) {
-                        setOrder((prev) => (prev ? { ...prev, status: fresh.status } : null));
-                    }
+                if (!currentId) return;
+
+                // Use getOrderByIdFromServer which calls getDocFromServer/getDocsFromServer
+                // This bypasses persistentLocalCache and fetches fresh data from the server
+                const fresh = await ordersService.getOrderByIdFromServer(currentId);
+                if (fresh) {
+                    setOrder((prev) => {
+                        if (!prev) return null;
+                        if (prev.status !== fresh.status) {
+                            return {
+                                ...prev,
+                                status: fresh.status,
+                                total: fresh.total ?? prev.total,
+                                subtotal: (fresh as any).subtotal ?? prev.subtotal,
+                                delivery_fee: (fresh as any).delivery_fee ?? prev.delivery_fee,
+                                items: fresh.items ?? prev.items,
+                            };
+                        }
+                        return prev;
+                    });
                 }
             } catch {
-                // Background polling error ignored
+                // Background server polling error — silently ignore, onSnapshot is primary
             }
-        }, 3000);
+        };
+
+        const pollTimer = setInterval(pollFromServer, 2500);
+
+        // ─── 5. Visibility Change Handler (mobile browsers kill WebSocket when backgrounded) ───
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible') {
+                // When user returns to the tab/app, re-subscribe onSnapshot and do an immediate server poll
+                unsubscribeFirestore();
+                unsubscribeFirestore = ordersService.subscribeToOrder(targetId, (freshOrder) => {
+                    if (freshOrder) {
+                        setOrder((prev) => {
+                            if (!prev) {
+                                return {
+                                    id: freshOrder.id,
+                                    order_number: freshOrder.order_number || null,
+                                    status: freshOrder.status,
+                                    type: freshOrder.type,
+                                    branch: freshOrder.branch,
+                                    subtotal: freshOrder.subtotal,
+                                    delivery_fee: freshOrder.delivery_fee,
+                                    total: freshOrder.total,
+                                    created_at: freshOrder.created_at,
+                                    items: freshOrder.items || [],
+                                };
+                            }
+                            if (prev.status === freshOrder.status && prev.total === freshOrder.total) {
+                                return prev;
+                            }
+                            return {
+                                ...prev,
+                                status: freshOrder.status,
+                                total: freshOrder.total ?? prev.total,
+                                subtotal: freshOrder.subtotal ?? prev.subtotal,
+                                delivery_fee: freshOrder.delivery_fee ?? prev.delivery_fee,
+                                items: freshOrder.items ?? prev.items,
+                            };
+                        });
+                    }
+                });
+                // Immediate server poll on visibility restore
+                pollFromServer();
+            }
+        };
+        document.addEventListener('visibilitychange', handleVisibilityChange);
 
         return () => {
             unsubscribeFirestore();
             unsubscribeSync();
             window.removeEventListener('storage', handleStorage);
             clearInterval(pollTimer);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
         };
     }, [isOpen, order?.id, order?.order_number, order?.status, orderId]);
 

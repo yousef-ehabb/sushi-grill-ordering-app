@@ -2,7 +2,9 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
+  getDocsFromServer,
   setDoc,
   updateDoc,
   query,
@@ -868,6 +870,7 @@ export const ordersService = {
 
   /**
    * Update the status of an order (Admin / Kitchen Staff)
+   * Writes directly to Firestore document to trigger cross-device onSnapshot listeners
    */
   async updateOrderStatus(orderId: string, status: OrderStatus): Promise<void> {
     // 1. Update in local cache immediately
@@ -875,7 +878,8 @@ export const ordersService = {
     const updated = cached.map((o) => (o.id === orderId ? { ...o, status } : o));
     saveOrdersToCache(updated);
 
-    // 2. Update in Firestore if configured
+    // 2. Update in Firestore if configured — uses updateDoc on the exact document
+    // This triggers onSnapshot listeners on ALL devices watching this document
     if (!isFirebaseConfigured() || !db) return;
 
     try {
@@ -883,10 +887,62 @@ export const ordersService = {
       await updateDoc(docRef, {
         status,
         updated_at: new Date().toISOString(),
+        server_updated_at: serverTimestamp(),
       });
     } catch (error) {
       console.error(`[Firestore] Error updating order status ${orderId}:`, error);
       throw error;
+    }
+  },
+
+  /**
+   * Fetch a single order by ID or order_number DIRECTLY FROM FIRESTORE SERVER.
+   * Bypasses persistentLocalCache to guarantee fresh data for cross-device polling.
+   */
+  async getOrderByIdFromServer(orderId: string): Promise<Order | null> {
+    if (!isFirebaseConfigured() || !db) {
+      return null;
+    }
+
+    const rawLookup = String(orderId).trim();
+    const cleanLookup = rawLookup.replace(/^#/, '').trim();
+
+    try {
+      // If numeric order number (e.g. "1020" or "#1020"), query by order_number
+      if (/^\d+$/.test(cleanLookup)) {
+        const numericOrderNum = parseInt(cleanLookup, 10);
+        const q = query(
+          collection(db, ORDERS_COLLECTION),
+          where('order_number', '==', numericOrderNum),
+          limit(1)
+        );
+        const snap = await getDocsFromServer(q);
+        if (!snap.empty && snap.docs[0]) {
+          const order = {
+            id: snap.docs[0].id,
+            ...(snap.docs[0].data() as Omit<Order, 'id'>),
+          };
+          saveSingleOrderToCache(order);
+          return order;
+        }
+      }
+
+      // Direct document lookup by Firestore doc ID
+      const docRef = doc(db, ORDERS_COLLECTION, rawLookup);
+      const snap = await getDocFromServer(docRef);
+
+      if (!snap.exists()) return null;
+
+      const order = {
+        id: snap.id,
+        ...(snap.data() as Omit<Order, 'id'>),
+      };
+      saveSingleOrderToCache(order);
+      return order;
+    } catch (error) {
+      console.warn(`[Firestore] Server-direct fetch failed for order ${orderId}, falling back to cached getOrderById:`, error);
+      // If server fetch fails (e.g. offline), fall back to cache-aware method
+      return this.getOrderById(orderId);
     }
   },
 
