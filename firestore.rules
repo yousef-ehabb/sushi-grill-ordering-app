@@ -138,12 +138,19 @@ service cloud.firestore {
                        request.resource.data.items.size() > 0;
 
       // Staff can update only orders belonging to their branch, and cannot tamper with critical order fields
-      allow update: if (isGlobalAdmin() || (isStaffMember() && canAccessBranch(resource.data.branch))) &&
+      // Also allow customer cancellation while order status is still 'new'
+      allow update: if (
+        ((isGlobalAdmin() || (isStaffMember() && canAccessBranch(resource.data.branch))) &&
         request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(['status', 'updated_at', 'server_timestamp', 'kitchen_notes']) &&
         request.resource.data.total == resource.data.total &&
         request.resource.data.customer_phone == resource.data.customer_phone &&
-        request.resource.data.branch == resource.data.branch;
+        request.resource.data.branch == resource.data.branch)
+        ||
+        (resource.data.status == 'new' &&
+         request.resource.data.status == 'cancelled' &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updated_at']))
+      );
 
       // Disallow deletion to preserve audit trails
       allow delete: if false;

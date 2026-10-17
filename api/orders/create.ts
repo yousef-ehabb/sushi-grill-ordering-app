@@ -570,7 +570,7 @@ export default async function handler(req: any, res: any) {
 
     const { adminDb, adminAuth } = deps.getFirebaseAdmin();
 
-    // 3. Authentication extraction (optional for guests, verified for signed-in users)
+    // 3. Authentication extraction (100% optional - customer checkout is public and never rejected due to expired/invalid tokens)
     let authenticatedUserId: string | null = null;
     const authHeader = req.headers.authorization || req.headers.Authorization;
 
@@ -579,14 +579,11 @@ export default async function handler(req: any, res: any) {
       if (idToken && adminAuth && typeof adminAuth.verifyIdToken === 'function') {
         try {
           const decoded = await adminAuth.verifyIdToken(idToken);
-          authenticatedUserId = decoded.uid;
+          authenticatedUserId = decoded?.uid || null;
         } catch (tokenErr) {
-          console.warn('[API/create-order] Invalid auth token provided:', tokenErr);
-          return res.status(401).json({
-            success: false,
-            error: 'جلسة تسجيل الدخول غير صالحة أو منتهية، يرجى إعادة تسجيل الدخول',
-            code: 'INVALID_TOKEN',
-          });
+          // Public customer orders must NEVER be rejected due to an expired/invalid token
+          console.warn('[API/create-order] Invalid or expired auth token provided, proceeding as guest checkout:', tokenErr);
+          authenticatedUserId = null;
         }
       }
     }

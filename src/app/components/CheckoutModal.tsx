@@ -231,6 +231,11 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
           onClose();
         }
       }
+    } catch (err: any) {
+      console.error('[CheckoutModal] Unexpected error in handleSubmit:', err);
+      toast.error('حدث خطأ أثناء معالجة الطلب', {
+        description: err?.message || 'يرجى المحاولة مرة أخرى.',
+      });
     } finally {
       setIsSubmitting(false);
     }
