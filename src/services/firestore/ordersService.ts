@@ -425,16 +425,21 @@ export const ordersService = {
    * Fetch a single order by ID or order_number
    */
   async getOrderById(orderId: string): Promise<Order | null> {
-    const cached = getStoredOrders().find((o) => o.id === orderId);
+    const rawLookup = orderId.trim();
+    const cleanLookup = rawLookup.replace(/^#/, '');
+
+    const cached = getStoredOrders().find((o) =>
+      o.id === rawLookup ||
+      o.id === cleanLookup ||
+      (o.order_number && String(o.order_number) === cleanLookup)
+    );
 
     if (!isFirebaseConfigured() || !db) {
       return cached || null;
     }
 
     try {
-      const cleanLookup = orderId.trim();
-
-      // If lookup is numeric (e.g. "1001"), query by order_number first
+      // If lookup is numeric (e.g. "1001" or "#1001"), query by order_number first
       if (/^\d+$/.test(cleanLookup)) {
         const numericOrderNum = parseInt(cleanLookup, 10);
         const q = query(
@@ -444,14 +449,16 @@ export const ordersService = {
         );
         const snap = await getDocs(q);
         if (!snap.empty && snap.docs[0]) {
-          return {
+          const order = {
             id: snap.docs[0].id,
             ...(snap.docs[0].data() as Omit<Order, 'id'>),
           };
+          saveSingleOrderToCache(order);
+          return order;
         }
       }
 
-      const docRef = doc(db, ORDERS_COLLECTION, cleanLookup);
+      const docRef = doc(db, ORDERS_COLLECTION, rawLookup);
       const snap = await getDoc(docRef);
 
       if (!snap.exists()) return cached || null;
@@ -472,7 +479,14 @@ export const ordersService = {
    * Subscribe in real-time to a specific order (for customer tracking)
    */
   subscribeToOrder(orderId: string, callback: (order: Order | null) => void): Unsubscribe {
-    const cached = getStoredOrders().find((o) => o.id === orderId);
+    const rawLookup = orderId.trim();
+    const cleanLookup = rawLookup.replace(/^#/, '');
+
+    const cached = getStoredOrders().find((o) =>
+      o.id === rawLookup ||
+      o.id === cleanLookup ||
+      (o.order_number && String(o.order_number) === cleanLookup)
+    );
     if (cached) {
       callback(cached);
     }
@@ -481,7 +495,36 @@ export const ordersService = {
       return () => {};
     }
 
-    const docRef = doc(db, ORDERS_COLLECTION, orderId);
+    // If numeric order number was provided, query by order_number with real-time onSnapshot
+    if (/^\d+$/.test(cleanLookup)) {
+      const num = parseInt(cleanLookup, 10);
+      const q = query(
+        collection(db, ORDERS_COLLECTION),
+        where('order_number', '==', num),
+        limit(1)
+      );
+      return onSnapshot(
+        q,
+        (snap) => {
+          if (!snap.empty && snap.docs[0]) {
+            const order = {
+              id: snap.docs[0].id,
+              ...(snap.docs[0].data() as Omit<Order, 'id'>),
+            };
+            saveSingleOrderToCache(order);
+            callback(order);
+          } else {
+            callback(cached || null);
+          }
+        },
+        (error) => {
+          console.error(`[Firestore] Real-time error for order_number ${cleanLookup}:`, error);
+          if (cached) callback(cached);
+        }
+      );
+    }
+
+    const docRef = doc(db, ORDERS_COLLECTION, rawLookup);
     return onSnapshot(
       docRef,
       (snap) => {
@@ -497,7 +540,7 @@ export const ordersService = {
         }
       },
       (error) => {
-        console.error(`[Firestore] Real-time error for order ${orderId}:`, error);
+        console.error(`[Firestore] Real-time error for order ${rawLookup}:`, error);
         if (cached) callback(cached);
       }
     );

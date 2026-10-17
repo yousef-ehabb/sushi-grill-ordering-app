@@ -9,6 +9,8 @@ import { doc, getDoc } from 'firebase/firestore';
 import { db, isFirebaseConfigured } from '../../../lib/firebase';
 import { resolveAllOptionNames } from '../../utils/optionNames';
 import { getDisplayOrderId } from '../../utils/orderUtils';
+import { ordersService } from '../../../services/firestore';
+import { subscribeToSyncEvents } from '../../utils/realtimeSync';
 
 interface OrderDetail {
     id: string;
@@ -73,11 +75,30 @@ export const OrderDetailPage: React.FC = () => {
     useEffect(() => {
         if (orderId && user) {
             fetchOrderDetail();
+
+            const unsubFirestore = ordersService.subscribeToOrder(orderId, (fresh) => {
+                if (fresh) {
+                    setOrder((prev) => prev ? { ...prev, ...fresh } : null);
+                }
+            });
+
+            const unsubSync = subscribeToSyncEvents((event) => {
+                if (event.type === 'ORDER_STATUS_CHANGED') {
+                    if (event.orderId === orderId || (order?.order_number && String(order.order_number) === event.orderId)) {
+                        setOrder((prev) => prev ? { ...prev, status: event.status } : null);
+                    }
+                }
+            });
+
+            return () => {
+                unsubFirestore();
+                unsubSync();
+            };
         }
         if (products.length === 0) {
             fetchProducts();
         }
-    }, [orderId, user]);
+    }, [orderId, user, order?.order_number]);
 
     const fetchOrderDetail = async () => {
         if (!orderId || !user || !isFirebaseConfigured() || !db) return;

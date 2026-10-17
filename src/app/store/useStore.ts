@@ -730,19 +730,39 @@ export const useStore = create<AppState>()(
       },
 
       updateOrderStatus: async (orderId, status) => {
+        const targetOrder = get().orders.find((o) => o.id === orderId);
+
         set((state) => {
           const updated = state.orders.map((o) =>
             o.id === orderId ? { ...o, status } : o
           );
           saveOrdersToCache(updated);
-          return { orders: updated };
+          const activeOrder =
+            state.activeOrder && state.activeOrder.id === orderId
+              ? { ...state.activeOrder, status }
+              : state.activeOrder;
+          return { orders: updated, activeOrder };
         });
 
+        // Broadcast to all other tabs via BroadcastChannel & LocalStorage
         broadcastSyncEvent({
           type: 'ORDER_STATUS_CHANGED',
           orderId,
           status,
         });
+
+        if (targetOrder?.order_number) {
+          broadcastSyncEvent({
+            type: 'ORDER_STATUS_CHANGED',
+            orderId: String(targetOrder.order_number),
+            status,
+          });
+          broadcastSyncEvent({
+            type: 'ORDER_STATUS_CHANGED',
+            orderId: `#${targetOrder.order_number}`,
+            status,
+          });
+        }
 
         try {
           await ordersService.updateOrderStatus(orderId, status);
