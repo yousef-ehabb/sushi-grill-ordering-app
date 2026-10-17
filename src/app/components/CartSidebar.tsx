@@ -3,6 +3,7 @@ import { X, Plus, Minus, ShoppingBag, Trash2, ArrowRight, AlertTriangle } from '
 import { useStore, Order } from '../store/useStore';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
+import { isOptionAvailableInBranch } from '../utils/branchAvailability';
 
 interface CartSidebarProps {
   isOpen: boolean;
@@ -20,6 +21,8 @@ export const CartSidebar: React.FC<CartSidebarProps> = ({ isOpen, onClose, onChe
     orderType,
     categories,
     businessRules,
+    allOptionGroups,
+    selectedBranch,
     optionGroupsByProductId,
     optionGroupLoadingByProductId,
     fetchProductOptionGroups,
@@ -148,11 +151,15 @@ export const CartSidebar: React.FC<CartSidebarProps> = ({ isOpen, onClose, onChe
               </motion.div>
             ) : (
               cart.map((item) => {
+                const allItemOptions = [
+                  ...(allOptionGroups || []).flatMap(g => g.options || []),
+                  ...((optionGroupsByProductId[item.id] || []).flatMap(g => g.options || [])),
+                ];
                 const itemSauces = item.selectedOptionIds?.map(id => {
-                  const option = (optionGroupsByProductId[item.id] || [])
-                    .flatMap(g => g.options || [])
-                    .find(o => o.id === id);
-                  return option ? { name: option.name_ar, active: option.is_active } : null;
+                  const option = allItemOptions.find(o => o.id === id);
+                  if (!option) return null;
+                  const isAvailable = isOptionAvailableInBranch(option, selectedBranch);
+                  return { name: option.name_ar, active: isAvailable };
                 }).filter(Boolean) as { name: string; active: boolean }[] | undefined;
 
                 const hasUnavailableSauce = itemSauces?.some(s => !s.active);

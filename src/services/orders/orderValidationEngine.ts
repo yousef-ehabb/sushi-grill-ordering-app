@@ -169,6 +169,27 @@ export async function validateAndRecalculateOrder(
 
           if (optionDoc.exists()) {
             const optData = optionDoc.data();
+            if (optData.is_available === false || optData.is_active === false || optData.available === false) {
+              return {
+                isValid: false,
+                error: `الإضافة "${optData.name_ar || optId}" غير متوفرة حالياً`,
+                subtotal: 0,
+                deliveryFee: 0,
+                total: 0,
+                verifiedItems: [],
+              };
+            }
+            const branchMap = optData.branch_availability || optData.branchAvailability;
+            if (payload.branch && branchMap && branchMap[payload.branch] === false) {
+              return {
+                isValid: false,
+                error: `الإضافة "${optData.name_ar || optId}" غير متاحة في ${payload.branch}`,
+                subtotal: 0,
+                deliveryFee: 0,
+                total: 0,
+                verifiedItems: [],
+              };
+            }
             verifiedOptionsTotal += Number(optData.price_delta ?? optData.price) || 0;
           }
         }

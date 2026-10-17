@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { X, CheckCircle2, Truck, Store, MapPin, Phone, User, Loader2, ArrowLeft, UserCheck, AlertTriangle, Printer, Copy, Check } from 'lucide-react';
+import { X, CheckCircle2, Truck, Store, MapPin, Phone, User, Loader2, ArrowLeft, UserCheck, AlertTriangle, Printer, Copy, Check, Clock, Trash2 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { clsx } from 'clsx';
-import { isProductAvailableInBranch, isBranchOpen, getBranchClosedMessage } from '../utils/branchAvailability';
+import { isProductAvailableInBranch, isOptionAvailableInBranch, isBranchOpen, getBranchClosedMessage, isBranchAutoCloseEnabled } from '../utils/branchAvailability';
+import { isInOffHours } from '../utils/operatingHours';
 import { restaurantConfig } from '../../config/restaurant';
 import type { OrderReceiptData } from './OrderConfirmationModal';
 
@@ -36,10 +37,30 @@ const sanitizeEgyptianPhone = (value: string): string => {
 };
 
 export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, onOrderSuccess, onOpenTracking }) => {
-  const { cart, products, globalSettings, orderType, setOrderType, clearCart, submitOrder, loading } = useStore();
+  const {
+    cart,
+    products,
+    allOptionGroups,
+    globalSettings,
+    orderType,
+    setOrderType,
+    clearCart,
+    submitOrder,
+    loading,
+    removeUnavailableOptionsFromCart,
+    selectedBranch: storeBranch,
+    setSelectedBranch: setStoreBranch,
+  } = useStore();
   const { user, isAuthenticated } = useAuthStore();
   const [step, setStep] = useState(1);
-  const [selectedBranch, setSelectedBranch] = useState<'فرع الاستاد' | 'فرع الكرفان' | ''>('');
+  const [selectedBranch, setSelectedBranch] = useState<'فرع الاستاد' | 'فرع الكرفان' | ''>(
+    () => (storeBranch === 'فرع الاستاد' || storeBranch === 'فرع الكرفان' ? storeBranch : '')
+  );
+
+  const handleSelectBranch = (branch: 'فرع الاستاد' | 'فرع الكرفان') => {
+    setSelectedBranch(branch);
+    setStoreBranch(branch);
+  };
   const [formData, setFormData] = useState({
     name: '',
     phone: '',
@@ -58,6 +79,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
   const isPhoneTouchedOrFilled = formData.phone.length > 0;
   const isPhoneInvalid = isPhoneTouchedOrFilled && !isValidPhone;
 
+  const inOffHours = isInOffHours();
   const isBranchValid = selectedBranch === 'فرع الاستاد' || selectedBranch === 'فرع الكرفان';
   const isNameValid = formData.name.trim().length > 0;
   const isAddressValid = orderType === 'delivery' ? formData.address.trim().length > 0 : true;
@@ -65,10 +87,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
 
   const isWebsiteClosed = globalSettings && !globalSettings.is_website_open;
 
-  // Branch status check
+  // Branch status check (includes off-hours auto-close via isBranchOpen)
   const isSelectedBranchOpen = selectedBranch ? isBranchOpen(globalSettings, selectedBranch) : true;
   const branchClosedMessage = selectedBranch
-    ? getBranchClosedMessage(globalSettings, selectedBranch) || `${selectedBranch} مغلق حالياً، نسعد باستقبال طلباتكم في أوقات العمل القادمة.`
+    ? getBranchClosedMessage(globalSettings, selectedBranch) || `${selectedBranch} مغلق حالياً.`
     : '';
 
   // Branch items availability check
@@ -89,7 +111,37 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
     return (p && !p.is_available) || !item.is_available;
   });
   const hasUnavailableItems = unavailableCartItems.length > 0;
-  const isSubmitDisabled = loading || isSubmitting || !orderType || !isBranchValid || !isSelectedBranchOpen || hasBranchUnavailableItems || !!isWebsiteClosed || hasUnavailableItems || cart.length === 0 || !isFormValid;
+
+  // Options & sauces availability check in selected branch & globally
+  const unavailableCartOptions = useMemo(() => {
+    const allOptions = [
+      ...(allOptionGroups || []).flatMap((g) => g.options || []),
+      ...Object.values(useStore.getState().optionGroupsByProductId || {}).flatMap((groups) => groups.flatMap((g) => g.options || [])),
+    ];
+    const foundUnavailable: { itemName: string; optionName: string }[] = [];
+
+    for (const item of cart) {
+      if (item.selectedOptionIds && item.selectedOptionIds.length > 0) {
+        for (const optId of item.selectedOptionIds) {
+          const opt = allOptions.find((o) => o.id === optId);
+          if (opt) {
+            if (!isOptionAvailableInBranch(opt, selectedBranch)) {
+              foundUnavailable.push({
+                itemName: item.name_ar,
+                optionName: opt.name_ar,
+              });
+            }
+          }
+        }
+      }
+    }
+    return foundUnavailable;
+  }, [cart, allOptionGroups, selectedBranch]);
+
+  const hasUnavailableOptions = unavailableCartOptions.length > 0;
+
+  // isSubmitDisabled includes off-hours via isSelectedBranchOpen (which calls isBranchOpen which checks isInOffHours)
+  const isSubmitDisabled = loading || isSubmitting || !orderType || !isBranchValid || !isSelectedBranchOpen || hasBranchUnavailableItems || hasUnavailableOptions || !!isWebsiteClosed || hasUnavailableItems || cart.length === 0 || !isFormValid;
 
   // Auto-close if cart becomes empty in real-time (e.g. item removed)
   useEffect(() => {
@@ -155,17 +207,27 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
       return;
     }
 
-    if (isSubmitDisabled || !isValidPhone || !isBranchValid || !isSelectedBranchOpen || hasBranchUnavailableItems) {
+    if (isSubmitDisabled || !isValidPhone || !isBranchValid || !isSelectedBranchOpen || hasBranchUnavailableItems || hasUnavailableOptions) {
       if (!isBranchValid) {
         toast.error('يرجى اختيار الفرع (فرع الاستاد أو فرع الكرفان)');
         return;
       }
       if (!isSelectedBranchOpen) {
-        toast.error(`${selectedBranch} مغلق حالياً`);
+        const isAutoCloseActive = isBranchAutoCloseEnabled(globalSettings, selectedBranch);
+        if (inOffHours && isAutoCloseActive) {
+          toast.error('❌ المطعم خارج ساعات العمل — نستقبل طلباتكم اعتباراً من 12:00 ظهراً', { duration: 5000 });
+        } else {
+          toast.error(`${selectedBranch} مغلق حالياً — في انتظار الفتح اليدوي من الإدارة`);
+        }
         return;
       }
       if (hasBranchUnavailableItems) {
         toast.error(`الصنف "${unavailableItemNames}" غير متاح حالياً في ${selectedBranch}`);
+        return;
+      }
+      if (hasUnavailableOptions) {
+        const sauceNames = Array.from(new Set(unavailableCartOptions.map(o => o.optionName))).join('، ');
+        toast.error(`⚠️ عفواً، الإضافات التالية غير متوفرة في ${selectedBranch}: (${sauceNames})`);
         return;
       }
       if (!isValidPhone) {
@@ -359,7 +421,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
                       <div className="grid grid-cols-2 gap-3 sm:gap-4">
                         <button
                           type="button"
-                          onClick={() => setSelectedBranch('فرع الاستاد')}
+                          onClick={() => handleSelectBranch('فرع الاستاد')}
                           className={`relative overflow-hidden p-3 sm:p-4 rounded-xl sm:rounded-2xl flex flex-col items-center gap-2 sm:gap-3 transition-all duration-200 cursor-pointer ${selectedBranch === 'فرع الاستاد'
                             ? 'bg-white ring-2 ring-primary shadow-md shadow-red-100'
                             : 'bg-white border border-slate-200 text-slate-400 hover:border-slate-300 hover:bg-slate-50'
@@ -378,7 +440,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
 
                         <button
                           type="button"
-                          onClick={() => setSelectedBranch('فرع الكرفان')}
+                          onClick={() => handleSelectBranch('فرع الكرفان')}
                           className={`relative overflow-hidden p-3 sm:p-4 rounded-xl sm:rounded-2xl flex flex-col items-center gap-2 sm:gap-3 transition-all duration-200 cursor-pointer ${selectedBranch === 'فرع الكرفان'
                             ? 'bg-white ring-2 ring-primary shadow-md shadow-red-100'
                             : 'bg-white border border-slate-200 text-slate-400 hover:border-slate-300 hover:bg-slate-50'
@@ -416,6 +478,67 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
                             <p className="text-red-700 leading-relaxed">
                               عذراً، الصنف <span className="font-black text-red-900 underline underline-offset-2">{unavailableItemNames}</span> غير متاح حالياً في <span className="font-black text-red-900">{selectedBranch}</span>. يرجى اختيار الفرع الآخر أو تعديل السلة.
                             </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Branch Unavailable Sauces / Upgrades Interactive Resolution Prompt */}
+                      {selectedBranch && isSelectedBranchOpen && hasUnavailableOptions && (
+                        <div className="p-4 rounded-2xl bg-amber-50/95 border-2 border-amber-300 text-amber-950 shadow-md animate-in fade-in duration-200 space-y-3">
+                          <div className="flex items-start gap-2.5">
+                            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                            <div className="space-y-1">
+                              <p className="font-black text-xs sm:text-sm text-amber-950 leading-relaxed">
+                                ⚠️ تنبيه: ({Array.from(new Set(unavailableCartOptions.map(o => o.optionName))).join('، ')}) المضاف على الساندوتش غير متاح حالياً في {selectedBranch}. كيف تود المتابعة؟
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* 3 Interactive Action Buttons */}
+                          <div className="space-y-2 pt-1">
+                            {/* Option 1: Remove sauce & discount price */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                removeUnavailableOptionsFromCart(selectedBranch);
+                                toast.success('تمت إزالة الصوص غير المتاح وخصم سعره بنجاح، يمكنك الآن تأكيد الطلب فوراً');
+                              }}
+                              className="w-full py-2.5 px-3.5 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white rounded-xl text-xs sm:text-sm font-black transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer"
+                            >
+                              <CheckCircle2 className="w-4 h-4 shrink-0" />
+                              <span>إكمال الطلب بدون الصوص (خصم سعر الصوص)</span>
+                            </button>
+
+                            {/* Option 2: Switch branch / Edit order */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const otherBranch = selectedBranch === 'فرع الكرفان' ? 'فرع الاستاد' : 'فرع الكرفان';
+                                if (isBranchOpen(globalSettings, otherBranch)) {
+                                  handleSelectBranch(otherBranch);
+                                  toast.success(`تم تغيير الفرع إلى ${otherBranch}`);
+                                } else {
+                                  onClose();
+                                  toast.info('تم فتح السلة لتعديل الساندوتش والإضافات');
+                                }
+                              }}
+                              className="w-full py-2.5 px-3.5 bg-amber-600 hover:bg-amber-700 active:scale-[0.98] text-white rounded-xl text-xs sm:text-sm font-black transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer"
+                            >
+                              <Store className="w-4 h-4 shrink-0" />
+                              <span>
+                                تعديل الطلب / تغيير الفرع {isBranchOpen(globalSettings, selectedBranch === 'فرع الكرفان' ? 'فرع الاستاد' : 'فرع الكرفان') ? `(التحويل إلى ${selectedBranch === 'فرع الكرفان' ? 'فرع الاستاد' : 'فرع الكرفان'})` : ''}
+                              </span>
+                            </button>
+
+                            {/* Option 3: Cancel checkout */}
+                            <button
+                              type="button"
+                              onClick={onClose}
+                              className="w-full py-2 px-3.5 bg-white hover:bg-slate-100 active:scale-[0.98] text-slate-700 rounded-xl text-xs sm:text-sm font-bold transition-all border border-slate-300 flex items-center justify-center gap-2 cursor-pointer"
+                            >
+                              <X className="w-4 h-4 shrink-0" />
+                              <span>إلغاء الطلب</span>
+                            </button>
                           </div>
                         </div>
                       )}
@@ -524,6 +647,59 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
                     <div className="mb-3 p-2.5 bg-red-50 border border-red-200 rounded-xl text-red-800 text-xs font-medium flex items-center gap-2">
                       <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
                       <span>عذراً، يوجد أصناف غير متاحة حالياً ({unavailableCartItems.map(i => i.name_ar).join('، ')}).</span>
+                    </div>
+                  )}
+
+                  {hasUnavailableOptions && (
+                    <div className="mb-3 p-3.5 bg-amber-50/95 border-2 border-amber-300 rounded-2xl text-amber-950 text-xs font-medium space-y-2.5 shadow-sm">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <span className="font-bold leading-relaxed">
+                          ⚠️ تنبيه: ({Array.from(new Set(unavailableCartOptions.map(o => o.optionName))).join('، ')}) المضاف على الساندوتش غير متاح حالياً في {selectedBranch || 'الفرع المختار'}. كيف تود المتابعة؟
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 gap-1.5 pt-0.5">
+                        {selectedBranch && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              removeUnavailableOptionsFromCart(selectedBranch);
+                              toast.success('تمت إزالة الصوص غير المتاح وخصم سعره بنجاح، يمكنك الآن تأكيد الطلب فوراً');
+                            }}
+                            className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white rounded-xl text-xs font-black transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>إكمال الطلب بدون الصوص (خصم سعر الصوص)</span>
+                          </button>
+                        )}
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const otherBranch = selectedBranch === 'فرع الكرفان' ? 'فرع الاستاد' : 'فرع الكرفان';
+                              if (isBranchOpen(globalSettings, otherBranch)) {
+                                handleSelectBranch(otherBranch);
+                                toast.success(`تم تغيير الفرع إلى ${otherBranch}`);
+                              } else {
+                                onClose();
+                                toast.info('تم فتح السلة لتعديل الساندوتش والإضافات');
+                              }
+                            }}
+                            className="py-1.5 px-2 bg-amber-600 hover:bg-amber-700 active:scale-[0.98] text-white rounded-xl text-[11px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer"
+                          >
+                            <Store className="w-3.5 h-3.5" />
+                            <span>تعديل الطلب / تغيير الفرع</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={onClose}
+                            className="py-1.5 px-2 bg-white hover:bg-slate-100 active:scale-[0.98] text-slate-700 border border-slate-300 rounded-xl text-[11px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                            <span>إلغاء الطلب</span>
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   )}
 

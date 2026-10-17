@@ -15,11 +15,15 @@ import {
   getStoredOrders,
   saveOrdersToCache,
   mergeOrders,
+  optionsService,
+  getDefaultOptionGroups,
+  saveCachedOptionGroups,
 } from '../../services/firestore';
 import {
   isBranchOpen,
   getBranchClosedMessage,
   isProductAvailableInBranch,
+  isOptionAvailableInBranch,
 } from '../utils/branchAvailability';
 import {
   INITIAL_CATEGORIES,
@@ -63,7 +67,9 @@ export type ProductOption = {
   name_ar: string;
   price_delta: number;
   is_active: boolean;
+  available?: boolean;
   branch_availability?: Record<string, boolean>;
+  branchAvailability?: Record<string, boolean>;
   sort_order: number;
 };
 
@@ -119,6 +125,7 @@ export type OrderItem = {
 export type BranchOperationalStatus = {
   is_open: boolean;
   closed_message: string;
+  auto_close_enabled?: boolean;
 };
 
 export type GlobalSettings = {
@@ -149,6 +156,7 @@ interface AppState {
   cart: CartItem[];
   orders: Order[];
   orderType: 'pickup' | 'delivery' | null;
+  selectedBranch: string | null;
   loading: boolean;
   error: string | null;
 
@@ -173,12 +181,15 @@ interface AppState {
 
   // Real-Time Sync Setters
   setProducts: (products: Product[]) => void;
+  setAllOptionGroups: (groups: OptionGroup[]) => void;
   setGlobalSettings: (settings: GlobalSettings) => void;
   updateProductAvailabilityLocal: (productId: string, is_available: boolean) => void;
   updateGlobalSettingsLocal: (data: Partial<GlobalSettings>) => void;
 
   // Cart Actions
   setOrderType: (type: 'pickup' | 'delivery') => void;
+  setSelectedBranch: (branch: string | null) => void;
+  removeUnavailableOptionsFromCart: (branch: string) => void;
   addToCart: (product: Product) => void;
   addToCartWithDetails: (product: Product, quantity: number, specialInstructions?: string, selectedOptionIds?: string[]) => void;
   removeFromCart: (cartKey: string) => void;
@@ -197,8 +208,9 @@ interface AppState {
 
   // Sauce Management
   toggleOptionActive: (optionId: string) => Promise<void>;
+  toggleOptionBranchAvailability: (optionId: string, branch: string) => Promise<void>;
   createOption: (groupId: string, data: { name_ar: string; price_delta: number }) => Promise<ProductOption | null>;
-  updateOption: (optionId: string, data: Partial<Pick<ProductOption, 'name_ar' | 'price_delta' | 'branch_availability' | 'is_active'>>) => Promise<void>;
+  updateOption: (optionId: string, data: Partial<ProductOption>) => Promise<void>;
   deleteOption: (optionId: string) => Promise<void>;
 
   // Operational Control Actions
@@ -216,10 +228,11 @@ export const useStore = create<AppState>()(
       products: INITIAL_PRODUCTS,
       optionGroupsByProductId: INITIAL_OPTION_GROUPS_BY_PRODUCT,
       optionGroupLoadingByProductId: {},
-      allOptionGroups: Object.values(INITIAL_OPTION_GROUPS_BY_PRODUCT).flat(),
+      allOptionGroups: getDefaultOptionGroups(),
       cart: [],
       orders: getStoredOrders(),
       orderType: null,
+      selectedBranch: null,
       loading: false,
       error: null,
       globalSettings: INITIAL_GLOBAL_SETTINGS,
@@ -244,6 +257,24 @@ export const useStore = create<AppState>()(
       },
 
       // ── Real-Time Sync Setters ──────────────────────────────
+
+      setAllOptionGroups: (groups: OptionGroup[]) => {
+        if (!groups || groups.length === 0) return;
+        saveCachedOptionGroups(groups);
+        set((state) => {
+          const updatedGroupsByProduct: Record<string, OptionGroup[]> = {};
+          for (const [prodId, pGroups] of Object.entries(state.optionGroupsByProductId)) {
+            updatedGroupsByProduct[prodId] = pGroups.map((pg) => {
+              const matched = groups.find((g) => g.id === pg.id);
+              return matched ? matched : pg;
+            });
+          }
+          return {
+            allOptionGroups: groups,
+            optionGroupsByProductId: Object.keys(updatedGroupsByProduct).length > 0 ? updatedGroupsByProduct : state.optionGroupsByProductId,
+          };
+        });
+      },
 
       setProducts: (products: Product[]) => {
         if (!products || products.length === 0) return;
@@ -308,8 +339,20 @@ export const useStore = create<AppState>()(
 
       fetchProductOptionGroups: async (productId: string, forceReload?: boolean) => {
         const state = get();
-        if (!forceReload && (state.optionGroupsByProductId[productId] !== undefined || state.optionGroupLoadingByProductId[productId])) {
-          return;
+        // If allOptionGroups is already loaded and we have matching groups, use them directly
+        if (!forceReload && state.allOptionGroups && state.allOptionGroups.length > 0) {
+          const matching = state.allOptionGroups.filter(
+            (g) => g.product_id === productId || g.product_id === 'all' || !g.product_id
+          );
+          if (matching.length > 0) {
+            set((current) => ({
+              optionGroupsByProductId: {
+                ...current.optionGroupsByProductId,
+                [productId]: matching,
+              },
+            }));
+            return;
+          }
         }
 
         set((current) => ({
@@ -320,11 +363,15 @@ export const useStore = create<AppState>()(
         }));
 
         try {
-          const orderedGroups = await productsService.getOptionGroupsForProduct(productId);
+          const groups = await optionsService.getOptionGroups();
+          get().setAllOptionGroups(groups);
+          const matching = groups.filter(
+            (g) => g.product_id === productId || g.product_id === 'all' || !g.product_id
+          );
           set((current) => ({
             optionGroupsByProductId: {
               ...current.optionGroupsByProductId,
-              [productId]: orderedGroups,
+              [productId]: matching.length > 0 ? matching : (INITIAL_OPTION_GROUPS_BY_PRODUCT[productId] || createOptionGroupsForProduct(productId)),
             },
             optionGroupLoadingByProductId: {
               ...current.optionGroupLoadingByProductId,
@@ -433,6 +480,53 @@ export const useStore = create<AppState>()(
       // ── Cart Actions ───────────────────────────────────────
 
       setOrderType: (type) => set({ orderType: type }),
+
+      setSelectedBranch: (branch) => set({ selectedBranch: branch }),
+
+      removeUnavailableOptionsFromCart: (branch) => {
+        const allGroups = [
+          ...(get().allOptionGroups || []),
+          ...Object.values(get().optionGroupsByProductId || {}).flat(),
+        ];
+        const allOptions = allGroups.flatMap((g) => g.options || []);
+
+        set((state) => {
+          let cartModified = false;
+          const updatedCart = state.cart.map((item) => {
+            if (!item.selectedOptionIds || item.selectedOptionIds.length === 0) {
+              return item;
+            }
+
+            const filteredOptions = item.selectedOptionIds.filter((optId) => {
+              const opt = allOptions.find((o) => o.id === optId);
+              if (!opt) return true;
+              return isOptionAvailableInBranch(opt, branch);
+            });
+
+            if (filteredOptions.length !== item.selectedOptionIds.length) {
+              cartModified = true;
+              const matchingGroups = allGroups.filter(
+                (g) => !g.product_id || g.product_id === 'all' || g.product_id === item.id
+              );
+              const newOptionsPrice = computeOptionsPrice(filteredOptions, matchingGroups);
+              const sorted = filteredOptions.slice().sort();
+              const newCartKey = sorted.length > 0 ? `${item.id}:${sorted.join(',')}` : item.id;
+
+              return {
+                ...item,
+                selectedOptionIds: filteredOptions,
+                optionsPrice: newOptionsPrice,
+                cartKey: item.specialInstructions ? `${newCartKey}-${Date.now()}` : newCartKey,
+              };
+            }
+            return item;
+          });
+
+          if (!cartModified) return state;
+
+          return { cart: updatedCart };
+        });
+      },
 
       addToCart: (product) =>
         set((state) => {
@@ -577,6 +671,33 @@ export const useStore = create<AppState>()(
             if (!prod || !prod.is_available || (orderData.branch && !isProductAvailableInBranch(prod, orderData.branch))) {
               unavailableItems.push(item.name_ar);
             }
+          }
+
+          // Validate options/sauces availability in selected branch
+          const allOptions = [
+            ...(get().allOptionGroups || []).flatMap((g) => g.options || []),
+            ...Object.values(get().optionGroupsByProductId || {}).flatMap((groups) => groups.flatMap((g) => g.options || [])),
+          ];
+          const unavailableOptions: string[] = [];
+          for (const item of orderData.items) {
+            if (item.selectedOptionIds && item.selectedOptionIds.length > 0) {
+              for (const optId of item.selectedOptionIds) {
+                const opt = allOptions.find((o) => o.id === optId);
+                if (opt) {
+                  if (!isOptionAvailableInBranch(opt, orderData.branch)) {
+                    unavailableOptions.push(opt.name_ar);
+                  }
+                }
+              }
+            }
+          }
+
+          if (unavailableOptions.length > 0) {
+            const errorMsg = orderData.branch
+              ? `عذراً، الإضافة "${unavailableOptions.join('، ')}" غير متاحة حالياً في ${orderData.branch}. يرجى تعديل السلة.`
+              : `عذراً، الإضافة "${unavailableOptions.join('، ')}" غير متاحة حالياً. يرجى تعديل السلة.`;
+            set({ loading: false, error: errorMsg });
+            return null;
           }
 
           if (unavailableItems.length > 0) {
@@ -974,173 +1095,202 @@ export const useStore = create<AppState>()(
       // ── Sauce Management ────────────────────────────────────
 
       fetchAllOptionGroups: async () => {
-        if (!isFirebaseConfigured() || !db) {
-          set({ allOptionGroups: Object.values(INITIAL_OPTION_GROUPS_BY_PRODUCT).flat() });
-          return;
-        }
         try {
-          const groupsSnap = await getDocs(collection(db, 'option_groups'));
-          if (groupsSnap.empty) {
-            set({ allOptionGroups: Object.values(INITIAL_OPTION_GROUPS_BY_PRODUCT).flat() });
-            return;
-          }
-
-          const groups: any[] = [];
-          for (const groupDoc of groupsSnap.docs) {
-            const groupData = { id: groupDoc.id, ...groupDoc.data() };
-            const optionsSnap = await getDocs(
-              query(collection(db, 'options'), where('group_id', '==', groupDoc.id))
-            );
-            const options = optionsSnap.docs.map(o => ({ id: o.id, ...o.data() }));
-            options.sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-            groups.push({ ...groupData, options });
-          }
-
-          groups.sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-          set({ allOptionGroups: groups });
-        } catch {
-          set({ allOptionGroups: Object.values(INITIAL_OPTION_GROUPS_BY_PRODUCT).flat() });
+          const groups = await optionsService.getOptionGroups();
+          get().setAllOptionGroups(groups);
+        } catch (error) {
+          console.warn('[useStore] Error fetching all option groups:', error);
+          get().setAllOptionGroups(getDefaultOptionGroups());
         }
       },
 
       toggleOptionActive: async (optionId) => {
-        let newActive: boolean;
-        set((state) => {
-          const allGroups = state.allOptionGroups;
-          let currentActive = true;
-          for (const g of allGroups) {
-            const opt = g.options?.find(o => o.id === optionId);
-            if (opt) { currentActive = opt.is_active; break; }
+        const currentGroups = get().allOptionGroups;
+        let targetOption: ProductOption | undefined;
+        for (const g of currentGroups) {
+          const opt = g.options?.find((o) => o.id === optionId);
+          if (opt) {
+            targetOption = opt;
+            break;
           }
-          newActive = !currentActive;
-          return {
-            allOptionGroups: allGroups.map(g => ({
-              ...g,
-              options: g.options?.map(o => o.id === optionId ? { ...o, is_active: newActive } : o),
-            })),
-            optionGroupsByProductId: Object.fromEntries(
-              Object.entries(state.optionGroupsByProductId).map(([productId, groups]) => [
-                productId,
-                groups.map(g => ({
-                  ...g,
-                  options: g.options?.map(o => o.id === optionId ? { ...o, is_active: newActive } : o),
-                })),
-              ])
-            ),
-          };
-        });
+        }
+        if (!targetOption) return;
 
-        if (!isFirebaseConfigured() || !db) return;
+        const newActive = !(targetOption.is_active !== false && (targetOption as any).available !== false);
+        const updatedGroups = currentGroups.map((g) => ({
+          ...g,
+          options: g.options?.map((o) =>
+            o.id === optionId ? { ...o, is_active: newActive, available: newActive } : o
+          ),
+        }));
+
+        get().setAllOptionGroups(updatedGroups);
+        broadcastSyncEvent({ type: 'OPTIONS_UPDATED', optionGroups: updatedGroups });
+
         try {
-          await updateDoc(doc(db, 'options', optionId), { is_active: newActive });
+          await optionsService.updateOption(optionId, {
+            ...targetOption,
+            is_active: newActive,
+            available: newActive,
+          });
         } catch (error) {
-          console.error('Failed to toggle option:', error);
-          get().fetchAllOptionGroups();
-          set({ optionGroupsByProductId: {}, optionGroupLoadingByProductId: {} });
-          throw error;
+          console.error('[useStore] Failed to toggle option in Firestore:', error);
         }
       },
 
+      toggleOptionBranchAvailability: async (optionId: string, branch: string) => {
+        const currentGroups = get().allOptionGroups;
+        let targetOption: ProductOption | undefined;
+        for (const g of currentGroups) {
+          const found = g.options?.find((o) => o.id === optionId);
+          if (found) {
+            targetOption = found;
+            break;
+          }
+        }
+        if (!targetOption) return;
+
+        const isCurrentBranchAvailable = isOptionAvailableInBranch(targetOption, branch);
+        const nextVal = !isCurrentBranchAvailable;
+
+        // Ensure both branches are explicitly preserved so undefined keys never overwrite default true
+        const existingBranchMap = {
+          'فرع الاستاد': isOptionAvailableInBranch(targetOption, 'فرع الاستاد'),
+          'فرع الكرفان': isOptionAvailableInBranch(targetOption, 'فرع الكرفان'),
+          ...(targetOption.branch_availability || {}),
+          ...((targetOption as any).branchAvailability || {}),
+        };
+
+        const nextBranchMap = {
+          ...existingBranchMap,
+          [branch]: nextVal,
+        };
+
+        const updatePayload: Partial<ProductOption> = {
+          branch_availability: nextBranchMap,
+          branchAvailability: nextBranchMap,
+        };
+        if (nextVal && (targetOption.is_active === false || (targetOption as any).available === false)) {
+          updatePayload.is_active = true;
+          updatePayload.available = true;
+        }
+
+        await get().updateOption(optionId, updatePayload);
+      },
+
       createOption: async (groupId, data) => {
-        if (!isFirebaseConfigured() || !db) return null;
-        const group = get().allOptionGroups.find(g => g.id === groupId);
-        const maxSort = Math.max(0, ...(group?.options?.map(o => o.sort_order) || []));
+        const currentGroups = get().allOptionGroups;
+        const group = currentGroups.find((g) => g.id === groupId);
+        const maxSort = Math.max(0, ...(group?.options?.map((o) => o.sort_order ?? 0) || []));
+
+        const tempId = 'opt_' + Date.now();
+        const initialBranchAvail = { 'فرع الاستاد': true, 'فرع الكرفان': true };
+        const newOption: ProductOption = {
+          id: tempId,
+          group_id: groupId,
+          name_ar: data.name_ar,
+          price_delta: data.price_delta,
+          is_active: true,
+          available: true,
+          branch_availability: initialBranchAvail,
+          branchAvailability: initialBranchAvail,
+          sort_order: maxSort + 1,
+        };
+
+        let updatedGroups = currentGroups.map((g) =>
+          g.id === groupId ? { ...g, options: [...(g.options || []), newOption] } : g
+        );
+        get().setAllOptionGroups(updatedGroups);
 
         try {
-          const optionData = {
-            group_id: groupId,
+          const realId = await optionsService.createOption(groupId, {
             name_ar: data.name_ar,
             price_delta: data.price_delta,
             is_active: true,
+            available: true,
+            branch_availability: initialBranchAvail,
+            branchAvailability: initialBranchAvail,
             sort_order: maxSort + 1,
-          };
-          const newDocRef = await addDoc(collection(db, 'options'), optionData);
+          });
 
-          const newOption = { id: newDocRef.id, ...optionData } as ProductOption;
-          set((state) => ({
-            allOptionGroups: state.allOptionGroups.map(g =>
-              g.id === groupId ? { ...g, options: [...(g.options || []), newOption] } : g
-            ),
-            optionGroupsByProductId: Object.fromEntries(
-              Object.entries(state.optionGroupsByProductId).map(([productId, groups]) => [
-                productId,
-                groups.map(g =>
-                  g.id === groupId ? { ...g, options: [...(g.options || []), newOption] } : g
-                ),
-              ])
-            ),
-          }));
-          return newOption;
+          updatedGroups = updatedGroups.map((g) =>
+            g.id === groupId
+              ? {
+                  ...g,
+                  options: g.options?.map((o) => (o.id === tempId ? { ...o, id: realId } : o)),
+                }
+              : g
+          );
+          get().setAllOptionGroups(updatedGroups);
+          broadcastSyncEvent({ type: 'OPTIONS_UPDATED', optionGroups: updatedGroups });
+          return { ...newOption, id: realId };
         } catch (error) {
-          console.error('Failed to create option:', error);
-          get().fetchAllOptionGroups();
-          set({ optionGroupsByProductId: {}, optionGroupLoadingByProductId: {} });
-          return null;
+          console.error('[useStore] Failed to create option in Firestore:', error);
+          broadcastSyncEvent({ type: 'OPTIONS_UPDATED', optionGroups: updatedGroups });
+          return newOption;
         }
       },
 
       updateOption: async (optionId, data) => {
-        const groupBefore = get().allOptionGroups.find(g => g.options?.some(o => o.id === optionId));
-        const productIdForInvalidation = groupBefore?.product_id;
-        // Optimistic update
-        set((state) => ({
-          allOptionGroups: state.allOptionGroups.map(g => ({
-            ...g,
-            options: g.options?.map(o => o.id === optionId ? { ...o, ...data } : o),
-          })),
-          optionGroupsByProductId: Object.fromEntries(
-            Object.entries(state.optionGroupsByProductId).map(([productId, groups]) => [
-              productId,
-              groups.map(g => ({
-                ...g,
-                options: g.options?.map(o => o.id === optionId ? { ...o, ...data } : o),
-              })),
-            ])
-          ),
+        const currentGroups = get().allOptionGroups;
+        let targetOption: ProductOption | undefined;
+        for (const g of currentGroups) {
+          const found = g.options?.find((o) => o.id === optionId);
+          if (found) {
+            targetOption = found;
+            break;
+          }
+        }
+
+        const mergedData: Partial<ProductOption> = { ...data };
+        if (data.branch_availability && !data.branchAvailability) {
+          mergedData.branchAvailability = data.branch_availability;
+        } else if (data.branchAvailability && !data.branch_availability) {
+          mergedData.branch_availability = data.branchAvailability;
+        }
+        if (typeof data.is_active === 'boolean' && typeof data.available !== 'boolean') {
+          mergedData.available = data.is_active;
+        } else if (typeof data.available === 'boolean' && typeof data.is_active !== 'boolean') {
+          mergedData.is_active = data.available;
+        }
+
+        const updatedGroups = currentGroups.map((g) => ({
+          ...g,
+          options: g.options?.map((o) => (o.id === optionId ? { ...o, ...mergedData } : o)),
         }));
 
-        if (!isFirebaseConfigured() || !db) return;
+        saveCachedOptionGroups(updatedGroups);
+        get().setAllOptionGroups(updatedGroups);
+        broadcastSyncEvent({ type: 'OPTIONS_UPDATED', optionGroups: updatedGroups });
+
         try {
-          await updateDoc(doc(db, 'options', optionId), data);
+          const firestorePayload: any = {
+            ...(mergedData.branch_availability ? { branch_availability: mergedData.branch_availability, branchAvailability: mergedData.branchAvailability } : {}),
+            ...(typeof mergedData.is_active === 'boolean' ? { is_active: mergedData.is_active, available: mergedData.available } : {}),
+            ...(mergedData.name_ar ? { name_ar: mergedData.name_ar } : {}),
+            ...(typeof mergedData.price_delta === 'number' ? { price_delta: mergedData.price_delta } : {}),
+          };
+          await optionsService.updateOption(optionId, firestorePayload);
         } catch (error) {
-          console.error('Failed to update option:', error);
-          get().fetchAllOptionGroups();
-          set({ optionGroupsByProductId: {}, optionGroupLoadingByProductId: {} });
-          throw error;
+          console.error('[useStore] Failed to update option in Firestore:', error);
         }
-        if (productIdForInvalidation) get().invalidateOptionGroups(productIdForInvalidation);
       },
 
       deleteOption: async (optionId) => {
-        const groupBefore = get().allOptionGroups.find(g => g.options?.some(o => o.id === optionId));
-        const productIdForInvalidation = groupBefore?.product_id;
-        // Optimistic delete
-        set((state) => ({
-          allOptionGroups: state.allOptionGroups.map(g => ({
-            ...g,
-            options: g.options?.filter(o => o.id !== optionId),
-          })),
-          optionGroupsByProductId: Object.fromEntries(
-            Object.entries(state.optionGroupsByProductId).map(([productId, groups]) => [
-              productId,
-              groups.map(g => ({
-                ...g,
-                options: g.options?.filter(o => o.id !== optionId),
-              })),
-            ])
-          ),
+        const currentGroups = get().allOptionGroups;
+        const updatedGroups = currentGroups.map((g) => ({
+          ...g,
+          options: g.options?.filter((o) => o.id !== optionId),
         }));
 
-        if (!isFirebaseConfigured() || !db) return;
+        get().setAllOptionGroups(updatedGroups);
+        broadcastSyncEvent({ type: 'OPTIONS_UPDATED', optionGroups: updatedGroups });
+
         try {
-          await deleteDoc(doc(db, 'options', optionId));
+          await optionsService.deleteOption(optionId);
         } catch (error) {
-          console.error('Failed to delete option:', error);
-          get().fetchAllOptionGroups();
-          set({ optionGroupsByProductId: {}, optionGroupLoadingByProductId: {} });
-          throw error;
+          console.error('[useStore] Failed to delete option in Firestore:', error);
         }
-        if (productIdForInvalidation) get().invalidateOptionGroups(productIdForInvalidation);
       },
     }),
     {
@@ -1148,6 +1298,7 @@ export const useStore = create<AppState>()(
       partialize: (state) => ({
         cart: state.cart,
         orderType: state.orderType,
+        selectedBranch: state.selectedBranch,
         orders: state.orders,
       }),
     }

@@ -199,12 +199,14 @@ export const INITIAL_GLOBAL_SETTINGS: GlobalSettings = {
   closed_message: 'المطعم مغلق حالياً، نسعد باستقبال طلباتكم في أوقات العمل القادمة.',
   branches: {
     'فرع الاستاد': {
-      is_open: true,
-      closed_message: 'فرع الاستاد مغلق حالياً، نسعد باستقبال طلباتكم في أوقات العمل القادمة.',
+      is_open: false,
+      closed_message: 'فرع الاستاد مغلق حالياً — في انتظار فتح الفرع من الإدارة. نسعد باستقبالكم قريباً.',
+      auto_close_enabled: true,
     },
     'فرع الكرفان': {
-      is_open: true,
-      closed_message: 'فرع الكرفان مغلق حالياً، نسعد باستقبال طلباتكم في أوقات العمل القادمة.',
+      is_open: false,
+      closed_message: 'فرع الكرفان مغلق حالياً — في انتظار فتح الفرع من الإدارة. نسعد باستقبالكم قريباً.',
+      auto_close_enabled: true,
     },
   },
   created_at: new Date().toISOString(),

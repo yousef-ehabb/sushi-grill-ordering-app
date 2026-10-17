@@ -1,9 +1,10 @@
-import type { Product, GlobalSettings } from '../store/useStore';
+import type { Product, GlobalSettings, OptionGroup } from '../store/useStore';
 
 export type SyncEventInput =
   | { type: 'PRODUCT_AVAILABILITY_CHANGED'; productId: string; is_available: boolean }
   | { type: 'PRODUCT_UPDATED'; productId: string; data: Partial<Product> }
   | { type: 'GLOBAL_SETTINGS_CHANGED'; settings: Partial<GlobalSettings> }
+  | { type: 'OPTIONS_UPDATED'; optionGroups: OptionGroup[] }
   | { type: 'ORDER_EVENT_NOTIFICATION'; orderId: string; action: 'created' | 'status_changed' }
   | { type: 'ORDER_CREATED'; order: any }
   | { type: 'ORDER_STATUS_CHANGED'; orderId: string; status: any }

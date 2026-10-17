@@ -16,10 +16,12 @@ import { OrderConfirmationModal, OrderReceiptData } from './components/OrderConf
 import { Footer } from './components/Footer';
 import { useStore } from './store/useStore';
 import { useAuthStore } from './store/useAuthStore';
-import { productsService, settingsService } from '../services/firestore';
+import { productsService, settingsService, optionsService } from '../services/firestore';
 import { subscribeToSyncEvents } from './utils/realtimeSync';
 import { restaurantConfig } from '../config/restaurant';
-import { ShoppingBag, UtensilsCrossed, Phone, XCircle, User, LogIn, ClipboardList, Flame } from 'lucide-react';
+import { isInOffHours, getOffHoursMessage } from './utils/operatingHours';
+import { isBranchOpen, isBranchAutoCloseEnabled, BRANCH_NAMES } from './utils/branchAvailability';
+import { ShoppingBag, UtensilsCrossed, Phone, XCircle, User, LogIn, ClipboardList, Flame, Clock } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -35,6 +37,7 @@ const CustomerLayout: React.FC = () => {
     fetchGlobalSettings,
     fetchProducts,
     setProducts,
+    setAllOptionGroups,
     setGlobalSettings,
     updateProductAvailabilityLocal,
     updateGlobalSettingsLocal,
@@ -43,7 +46,24 @@ const CustomerLayout: React.FC = () => {
     fetchOrders,
   } = useStore();
   const { isAuthenticated, user, initSession } = useAuthStore();
-  const isOpen = globalSettings?.is_website_open ?? true;
+  // Off-hours state — re-evaluated every minute so the overlay appears exactly at 2:00 AM
+  const [inOffHours, setInOffHours] = useState(() => isInOffHours());
+
+  useEffect(() => {
+    const tick = () => setInOffHours(isInOffHours());
+    // Check every 30 seconds for near-instant response at boundary
+    const interval = setInterval(tick, 30_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Website considered open only when: admin hasn't globally closed it,
+  // AND restaurant is not in enforced off-hours.
+  // If ANY branch has auto-close disabled and is open, or if at least one branch is open, off-hours overlay does not block users.
+  const isWebsiteGloballyOpen = globalSettings?.is_website_open ?? true;
+  const isAnyBranchAutoCloseEnabled = BRANCH_NAMES.some((b) => isBranchAutoCloseEnabled(globalSettings, b));
+  const isAnyBranchOpen = BRANCH_NAMES.some((b) => isBranchOpen(globalSettings, b));
+  const isOffHoursEnforced = inOffHours && isAnyBranchAutoCloseEnabled && !isAnyBranchOpen;
+  const isOpen = isWebsiteGloballyOpen && !isOffHoursEnforced;
   const [isScrolled, setIsScrolled] = useState(false);
 
   useEffect(() => {
@@ -62,7 +82,12 @@ const CustomerLayout: React.FC = () => {
       setGlobalSettings(liveSettings);
     });
 
-    // 3. Cross-Tab Live BroadcastChannel & localStorage sync (0ms same-browser sync)
+    // 3. Live Firestore Subscription for Sauces & Upgrades (Option Groups)
+    const unsubscribeOptions = optionsService.subscribeToOptionGroups((liveGroups) => {
+      setAllOptionGroups(liveGroups);
+    });
+
+    // 4. Cross-Tab Live BroadcastChannel & localStorage sync (0ms same-browser sync)
     const unsubscribeSync = subscribeToSyncEvents((event) => {
       if (event.type === 'PRODUCT_AVAILABILITY_CHANGED') {
         updateProductAvailabilityLocal(event.productId, event.is_available);
@@ -71,6 +96,8 @@ const CustomerLayout: React.FC = () => {
         setProducts(currentProducts.map(p => p.id === event.productId ? { ...p, ...event.data } : p));
       } else if (event.type === 'GLOBAL_SETTINGS_CHANGED') {
         updateGlobalSettingsLocal(event.settings);
+      } else if (event.type === 'OPTIONS_UPDATED') {
+        setAllOptionGroups(event.optionGroups);
       } else if (event.type === 'ORDER_CREATED') {
         const currentOrders = useStore.getState().orders;
         const exists = currentOrders.some((o) => o.id === event.order.id);
@@ -123,6 +150,7 @@ const CustomerLayout: React.FC = () => {
     return () => {
       unsubscribeProducts();
       unsubscribeSettings();
+      unsubscribeOptions();
       unsubscribeSync();
       document.removeEventListener('visibilitychange', handleRevalidate);
       window.removeEventListener('focus', handleRevalidate);
@@ -150,7 +178,7 @@ const CustomerLayout: React.FC = () => {
     <div className="min-h-screen bg-slate-50 font-['Thmanyah_Serif_Display','29LT_Azahar','IBM_Plex_Sans_Arabic',sans-serif] selection:bg-red-100 selection:text-red-900" dir="rtl">
       <Toaster position="top-center" expand={true} richColors theme="light" />
 
-      {/* Closed Overlay */}
+      {/* Closed Overlay — shown when off-hours OR admin has globally closed the website */}
       <AnimatePresence>
         {!isOpen && (
           <motion.div
@@ -165,13 +193,37 @@ const CustomerLayout: React.FC = () => {
               transition={{ delay: 0.15, duration: 0.5, type: 'spring' }}
               className="text-center max-w-md"
             >
-              <div className="w-20 h-20 mx-auto mb-6 bg-red-500/10 rounded-full flex items-center justify-center ring-8 ring-red-500/5">
-                <XCircle className="w-10 h-10 text-red-400" />
+              {/* Icon — clock for off-hours, X for admin-closed */}
+              <div className={`w-20 h-20 mx-auto mb-6 rounded-full flex items-center justify-center ring-8 ${
+                isOffHoursEnforced
+                  ? 'bg-amber-500/10 ring-amber-500/5'
+                  : 'bg-red-500/10 ring-red-500/5'
+              }`}>
+                {isOffHoursEnforced
+                  ? <Clock className="w-10 h-10 text-amber-400" />
+                  : <XCircle className="w-10 h-10 text-red-400" />
+                }
               </div>
-              <h2 className="text-3xl font-black text-white mb-3">المطعم مغلق</h2>
-              <p className="text-slate-300 text-lg leading-relaxed mb-8">
-                {globalSettings?.closed_message || restaurantConfig.ordering.closedMessage}
+
+              <h2 className="text-3xl font-black text-white mb-3">
+                {isOffHoursEnforced ? 'خارج ساعات العمل' : 'المطعم مغلق'}
+              </h2>
+
+              <p className="text-slate-300 text-lg leading-relaxed mb-4">
+                {isOffHoursEnforced
+                  ? getOffHoursMessage()
+                  : (globalSettings?.closed_message || restaurantConfig.ordering.closedMessage)
+                }
               </p>
+
+              {isOffHoursEnforced && (
+                <p className="text-slate-500 text-sm mb-8">
+                  ساعات العمل: 12:00 ظهراً — 2:00 صباحاً
+                </p>
+              )}
+
+              {!isOffHoursEnforced && <div className="mb-8" />}
+
               <div className="inline-flex items-center gap-3">
                 <div className="w-12 h-12 bg-white p-1 rounded-xl shadow-lg flex items-center justify-center">
                   <Flame className="w-8 h-8 text-primary fill-primary" />
@@ -333,7 +385,7 @@ const CustomerLayout: React.FC = () => {
             transition={{ duration: 0.5 }}
             className="flex flex-col items-center max-w-2xl mx-auto"
           >
-            {/* Status Badge with subtle glow */}
+            {/* Status Badge — only shows when truly open (shift hours + admin opened + not off-hours) */}
             {isOpen && (
               <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-black/40 border border-white/20 text-white text-xs sm:text-sm font-semibold mb-2 backdrop-blur-md shadow-sm">
                 <span className="relative flex h-2 w-2">

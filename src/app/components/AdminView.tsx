@@ -57,6 +57,9 @@ import {
   Eye,
   EyeOff,
   Calendar,
+  Lock,
+  Unlock,
+  Moon,
 } from 'lucide-react';
 import { resolveAllOptionNames } from '../utils/optionNames';
 import { getDisplayOrderId, isCancellable } from '../utils/orderUtils';
@@ -67,10 +70,11 @@ import {
   getYesterdayBusinessDayKey,
   formatBusinessDayArabic,
 } from '../utils/businessDay';
+import { isInOffHours, msUntilNextAutoClose, getOffHoursMessage } from '../utils/operatingHours';
 import { clsx } from 'clsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { Toaster, toast } from 'sonner';
-import { isProductAvailableInBranch, isBranchOpen } from '../utils/branchAvailability';
+import { isProductAvailableInBranch, isOptionAvailableInBranch, isBranchOpen, isBranchAutoCloseEnabled, BRANCH_NAMES } from '../utils/branchAvailability';
 import { useOrderNotifications } from '../hooks/useOrderNotifications';
 import { NotificationSoundWidget } from './NotificationSoundWidget';
 
@@ -81,10 +85,16 @@ export const AdminView: React.FC = () => {
     updateOrderStatus, fetchOrders, fetchProducts, fetchCategories,
     fetchGlobalSettings, fetchBusinessRules, fetchAllOptionGroups,
     updateProduct, updateGlobalSettings, updateBusinessRule,
-    toggleOptionActive, createOption, updateOption, deleteOption,
+    toggleOptionActive, toggleOptionBranchAvailability, createOption, updateOption, deleteOption,
     toggleProductBranchAvailability, updateBranchStatus
   } = useStore();
   const { signOut, adminRole, adminBranchScope, adminTitle } = useAuthStore();
+  const branchAdminTarget: 'فرع الاستاد' | 'فرع الكرفان' | null =
+    adminRole === 'caravan_admin' || adminBranchScope === 'فرع الكرفان'
+      ? 'فرع الكرفان'
+      : adminRole === 'stadium_admin' || adminBranchScope === 'فرع الاستاد'
+      ? 'فرع الاستاد'
+      : (adminBranchScope && adminBranchScope !== 'all' ? (adminBranchScope as any) : null);
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'orders' | 'menu' | 'controls' | 'analytics'>('orders');
   const [optionNames, setOptionNames] = useState<Map<string, string>>(new Map());
@@ -246,6 +256,54 @@ export const AdminView: React.FC = () => {
   const [localCaravanClosedMessage, setLocalCaravanClosedMessage] = useState('');
   const [localMinQty, setLocalMinQty] = useState<Record<string, number>>({});
   const [isSaving, setIsSaving] = useState(false);
+
+  // ── Off-hours real-time state ────────────────────────────────────────
+  const [inOffHours, setInOffHours] = useState(() => isInOffHours());
+
+  // Re-check every 30s so the UI updates within half a minute of 2:00 AM boundary
+  useEffect(() => {
+    const tick = () => setInOffHours(isInOffHours());
+    const interval = setInterval(tick, 30_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // ── Auto-Close Scheduler ─────────────────────────────────────────────
+  // Runs once on mount, schedules a timer for the next 2:00 AM.
+  // At 2:00 AM it writes is_open=false to Firestore for branches where auto_close_enabled !== false,
+  // then reschedules itself for the following night.
+  useEffect(() => {
+    let cleanupTimer: ReturnType<typeof setTimeout>;
+
+    const scheduleAutoClose = () => {
+      const delay = msUntilNextAutoClose();
+      cleanupTimer = setTimeout(async () => {
+        try {
+          // Auto-close branches at 2:00 AM where auto_close_enabled is true (default true)
+          const currentSettings = useStore.getState().globalSettings;
+          let closedBranchesCount = 0;
+          for (const branch of BRANCH_NAMES) {
+            const isAutoCloseEnabled = currentSettings?.branches?.[branch]?.auto_close_enabled ?? true;
+            if (isAutoCloseEnabled) {
+              await updateBranchStatus(branch, { is_open: false });
+              closedBranchesCount++;
+            }
+          }
+          if (closedBranchesCount > 0) {
+            toast.info('🌙 تم الإغلاق التلقائي — الساعة 2:00 صباحاً. افتح الفروع يدوياً عند بدء الوردية.', {
+              duration: 8000,
+            });
+          }
+        } catch (err) {
+          console.error('[AutoClose] Failed to auto-close branches at 2 AM:', err);
+        }
+        // Reschedule for next night
+        scheduleAutoClose();
+      }, delay);
+    };
+
+    scheduleAutoClose();
+    return () => clearTimeout(cleanupTimer);
+  }, []);
 
   // Sauce management panel state
   const [showSaucePanel, setShowSaucePanel] = useState(false);
@@ -612,10 +670,35 @@ export const AdminView: React.FC = () => {
 
   const handleToggleBranch = async (branchName: 'فرع الاستاد' | 'فرع الكرفان') => {
     if (!globalSettings) return;
-    const branchData = globalSettings.branches?.[branchName] || { is_open: true, closed_message: '' };
+    const branchData = globalSettings.branches?.[branchName] || { is_open: false, closed_message: '', auto_close_enabled: true };
     const nextIsOpen = !branchData.is_open;
+    const isAutoCloseEnabled = branchData.auto_close_enabled ?? true;
+
+    // Block opening during off-hours ONLY if auto-close is enabled for this branch
+    if (nextIsOpen && isInOffHours() && isAutoCloseEnabled) {
+      toast.error(
+        `لا يمكن فتح ${branchName} خارج ساعات العمل (2:00 ص — 12:00 ظ) طالما الإغلاق التلقائي مفعل. يمكنك إيقاف الإغلاق التلقائي لفتح الفرع الآن.`,
+        { duration: 5000 }
+      );
+      return;
+    }
+
     await updateBranchStatus(branchName, { is_open: nextIsOpen });
-    toast.success(nextIsOpen ? `تم فتح ${branchName}` : `تم إغلاق ${branchName}`);
+    toast.success(nextIsOpen ? `✅ تم فتح ${branchName} يدوياً` : `❌ تم إغلاق ${branchName}`);
+  };
+
+  const handleToggleAutoClose = async (branchName: 'فرع الاستاد' | 'فرع الكرفان') => {
+    if (!globalSettings) return;
+    const branchData = globalSettings.branches?.[branchName] || { is_open: false, closed_message: '', auto_close_enabled: true };
+    const currentEnabled = branchData.auto_close_enabled ?? true;
+    const nextEnabled = !currentEnabled;
+
+    await updateBranchStatus(branchName, { auto_close_enabled: nextEnabled });
+    toast.success(
+      nextEnabled
+        ? `✅ تم تفعيل الإغلاق التلقائي (2:00 ص) لـ ${branchName}`
+        : `⚠️ تم إيقاف الإغلاق التلقائي لـ ${branchName} — الفرع الآن تحت التحكم اليدوي الكامل`
+    );
   };
 
   const handleSaveControls = async () => {
@@ -808,15 +891,6 @@ export const AdminView: React.FC = () => {
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={openSaucePanel}
-                  className="flex items-center gap-2 bg-amber-50 text-amber-700 px-3.5 py-2 rounded-xl font-bold text-xs hover:bg-amber-100 transition-all border border-amber-200"
-                >
-                  <UtensilsCrossed className="w-4 h-4" />
-                  <span>إدارة الصصوصات</span>
-                </button>
-              </div>
             </div>
 
             {/* Quick Status & Branch Filter Bar */}
@@ -1405,13 +1479,21 @@ export const AdminView: React.FC = () => {
         ) : activeTab === 'menu' ? (
           /* ── MENU TAB ─────────────────────────────────── */
           <div className="space-y-6">
-            <div className="flex justify-between items-center">
-              <h2 className="text-2xl font-bold text-slate-900">إدارة قائمة الطعام</h2>
-              <div className="flex gap-2">
-                <span className="text-slate-500 text-sm bg-white px-3 py-1 rounded-full border shadow-sm">
+            <div className="flex flex-wrap justify-between items-center gap-3 pb-2 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <h2 className="text-2xl font-bold text-slate-900">إدارة قائمة الطعام</h2>
+                <span className="text-slate-500 text-sm bg-white px-3 py-1 rounded-full border shadow-sm font-bold">
                   {products.length} صنف
                 </span>
               </div>
+              <button
+                type="button"
+                onClick={openSaucePanel}
+                className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 active:scale-95 text-white px-4 py-2.5 rounded-xl font-bold text-xs transition-all shadow-sm shadow-amber-500/20 cursor-pointer"
+              >
+                <UtensilsCrossed className="w-4 h-4" />
+                <span>إدارة الصوصات والترقيات</span>
+              </button>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
@@ -1564,6 +1646,67 @@ export const AdminView: React.FC = () => {
               </div>
             </div>
 
+            {/* ── Off-Hours Status Banner ── */}
+            {(() => {
+              const stadiumAutoClose = globalSettings?.branches?.['فرع الاستاد']?.auto_close_enabled ?? true;
+              const caravanAutoClose = globalSettings?.branches?.['فرع الكرفان']?.auto_close_enabled ?? true;
+              const isAutoCloseActiveSomewhere = adminBranchScope !== 'all'
+                ? (globalSettings?.branches?.[adminBranchScope]?.auto_close_enabled ?? true)
+                : (stadiumAutoClose || caravanAutoClose);
+
+              return (
+                <div className={clsx(
+                  'rounded-2xl border p-5 flex items-start gap-4',
+                  inOffHours && isAutoCloseActiveSomewhere
+                    ? 'bg-amber-50 border-amber-200'
+                    : 'bg-emerald-50 border-emerald-200'
+                )}>
+                  <div className={clsx(
+                    'mt-0.5 p-2 rounded-xl shrink-0',
+                    inOffHours && isAutoCloseActiveSomewhere ? 'bg-amber-100' : 'bg-emerald-100'
+                  )}>
+                    {inOffHours && isAutoCloseActiveSomewhere
+                      ? <Moon className="w-5 h-5 text-amber-600" />
+                      : <Unlock className="w-5 h-5 text-emerald-600" />
+                    }
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className={clsx('font-black text-sm', inOffHours && isAutoCloseActiveSomewhere ? 'text-amber-900' : 'text-emerald-900')}>
+                      {inOffHours && isAutoCloseActiveSomewhere
+                        ? '⛔ خارج ساعات العمل — الإغلاق التلقائي نشط (2:00 ص – 12:00 ظ)'
+                        : inOffHours && !isAutoCloseActiveSomewhere
+                          ? '⚠️ خارج ساعات العمل (2:00 ص – 12:00 ظ) — الإغلاق التلقائي معطّل والفروع تعمل تحت التحكم اليدوي'
+                          : '✅ وقت الوردية — يمكن فتح الفروع يدوياً الآن'}
+                    </p>
+                    <p className={clsx('text-xs mt-1', inOffHours && isAutoCloseActiveSomewhere ? 'text-amber-700' : 'text-emerald-700')}>
+                      {inOffHours && isAutoCloseActiveSomewhere
+                        ? 'الفروع المفعل لها الإغلاق التلقائي تظل مغلقة حتى بداية الوردية (12:00 ظهراً) ولا يمكن فتحها إلا بعد إيقاف الإغلاق التلقائي للفرع أو انتظار بدء الوردية.'
+                        : inOffHours && !isAutoCloseActiveSomewhere
+                          ? 'تم إيقاف الإغلاق التلقائي، يمكنك فتح وإغلاق الفروع بحرية واستقبال الطلبات في أي وقت.'
+                          : 'قاعدة الفتح اليدوي: لا يُفتح أي فرع تلقائياً عند 12:00 ظهراً. يجب على الإدارة فتح كل فرع يدوياً لبدء استقبال الطلبات.'}
+                    </p>
+                  </div>
+                  <div className="shrink-0 flex items-center gap-2">
+                    {!inOffHours && (
+                      <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-full border border-emerald-200 whitespace-nowrap">
+                        وردية 12م – 2ص
+                      </span>
+                    )}
+                    {inOffHours && (
+                      <span className={clsx(
+                        "text-xs font-bold px-2.5 py-1 rounded-full border whitespace-nowrap",
+                        isAutoCloseActiveSomewhere
+                          ? "text-amber-700 bg-amber-100 border-amber-200"
+                          : "text-emerald-700 bg-emerald-100 border-emerald-200"
+                      )}>
+                        {isAutoCloseActiveSomewhere ? 'إغلاق تلقائي نشط' : 'تحكم يدوي كامل'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
             {adminBranchScope !== 'all' ? (
               /* ── Branch Admin Operational Control ────────────── */
               <div className="bg-white rounded-2xl p-6 md:p-8 border border-slate-100 shadow-sm space-y-6">
@@ -1574,32 +1717,95 @@ export const AdminView: React.FC = () => {
 
                 {(() => {
                   const isCurrentBranchOpen = isBranchOpen(globalSettings, adminBranchScope);
+                  const branchData = globalSettings?.branches?.[adminBranchScope];
+                  const isAutoCloseEnabled = branchData?.auto_close_enabled ?? true;
+                  const isBranchLockedOffHours = inOffHours && !isCurrentBranchOpen && isAutoCloseEnabled;
+
                   return (
                     <>
+                      {/* Branch Open/Close Toggle */}
                       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl bg-slate-50 border border-slate-100">
                         <div className="space-y-1">
                           <p className="font-bold text-slate-900">
-                            {isCurrentBranchOpen ? `${adminBranchScope} مفتوح للطلبات` : `${adminBranchScope} مغلق حالياً`}
+                            {isCurrentBranchOpen
+                              ? `${adminBranchScope} مفتوح للطلبات`
+                              : isBranchLockedOffHours
+                                ? `${adminBranchScope} مغلق تلقائياً (خارج الوردية)`
+                                : `${adminBranchScope} مغلق — في انتظار الفتح اليدوي`
+                            }
                           </p>
                           <p className="text-sm text-slate-500">
                             {isCurrentBranchOpen
                               ? 'العملاء يمكنهم طلب الوجبات من هذا الفرع واستلامها'
-                              : 'لن يتمكن العملاء من إتمام الطلبات على هذا الفرع حتى يتم إعادة فتحه'}
+                              : isBranchLockedOffHours
+                                ? 'الإغلاق التلقائي نشط حتى بداية الوردية (12:00 ظ)'
+                                : 'لن يتمكن العملاء من إتمام الطلبات حتى يتم فتح الفرع يدوياً من الإدارة'
+                            }
                           </p>
                         </div>
                         <button
+                          type="button"
                           onClick={() => handleToggleBranch(adminBranchScope as 'فرع الاستاد' | 'فرع الكرفان')}
+                          disabled={isBranchLockedOffHours}
+                          title={isBranchLockedOffHours ? 'لا يمكن فتح الفرع خارج ساعات العمل طالما الإغلاق التلقائي مفعل' : undefined}
                           className={clsx(
-                            "flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-sm transition-all shadow-sm active:scale-95 cursor-pointer whitespace-nowrap",
-                            isCurrentBranchOpen
-                              ? "bg-green-100 text-green-700 hover:bg-green-200 border border-green-200"
-                              : "bg-red-100 text-red-700 hover:bg-red-200 border border-red-200"
+                            "flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-sm transition-all shadow-sm whitespace-nowrap",
+                            isBranchLockedOffHours
+                              ? "bg-amber-50 text-amber-600 border border-amber-200 cursor-not-allowed opacity-70"
+                              : isCurrentBranchOpen
+                                ? "bg-green-100 text-green-700 hover:bg-green-200 border border-green-200 active:scale-95 cursor-pointer"
+                                : "bg-blue-100 text-blue-700 hover:bg-blue-200 border border-blue-200 active:scale-95 cursor-pointer"
                           )}
                         >
-                          {isCurrentBranchOpen ? (
-                            <><ToggleRight className="w-5 h-5" /> الفرع مفتوح</>
+                          {isBranchLockedOffHours ? (
+                            <><Lock className="w-5 h-5" /> مقفل (وردية 2ص–12ظ)</>
+                          ) : isCurrentBranchOpen ? (
+                            <><ToggleRight className="w-5 h-5" /> الفرع مفتوح — إغلاق</>
                           ) : (
-                            <><ToggleLeft className="w-5 h-5" /> الفرع مغلق</>
+                            <><Unlock className="w-5 h-5" /> افتح الفرع الآن</>
+                          )}
+                        </button>
+                      </div>
+
+                      {/* Auto-Close Dedicated Toggle Card */}
+                      <div className={clsx(
+                        "flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl border transition-all",
+                        isAutoCloseEnabled ? "bg-slate-50/80 border-slate-200" : "bg-amber-50/40 border-amber-200"
+                      )}>
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <Moon className={clsx("w-4 h-4", isAutoCloseEnabled ? "text-slate-700" : "text-amber-600")} />
+                            <p className="font-bold text-slate-900 text-sm">
+                              الإغلاق التلقائي بعد مواعيد العمل (2:00 ص)
+                            </p>
+                            <span className={clsx(
+                              "text-[10px] font-black px-2 py-0.5 rounded-full border",
+                              isAutoCloseEnabled
+                                ? "bg-emerald-100 text-emerald-800 border-emerald-200"
+                                : "bg-amber-100 text-amber-800 border-amber-200"
+                            )}>
+                              {isAutoCloseEnabled ? 'مفعل' : 'معطل'}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-500 leading-relaxed max-w-xl">
+                            عند التفعيل، يتم إغلاق الفرع تلقائياً الساعة 2:00 صباحاً وحتى تقوم بفتحه يدوياً. عند الإيقاف، يظل الفرع مفتوحاً أو تحت التحكم اليدوي الكامل.
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleToggleAutoClose(adminBranchScope as 'فرع الاستاد' | 'فرع الكرفان')}
+                          className={clsx(
+                            "flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs transition-all shadow-sm whitespace-nowrap cursor-pointer active:scale-95",
+                            isAutoCloseEnabled
+                              ? "bg-emerald-600 text-white hover:bg-emerald-700 border border-emerald-600"
+                              : "bg-slate-200 text-slate-700 hover:bg-slate-300 border border-slate-300"
+                          )}
+                        >
+                          {isAutoCloseEnabled ? (
+                            <><ToggleRight className="w-4 h-4 text-white" /> إيقاف الإغلاق التلقائي</>
+                          ) : (
+                            <><ToggleLeft className="w-4 h-4 text-slate-500" /> تفعيل الإغلاق التلقائي</>
                           )}
                         </button>
                       </div>
@@ -1707,29 +1913,88 @@ export const AdminView: React.FC = () => {
                     {/* فرع الاستاد */}
                     {(() => {
                       const isStadiumOpen = isBranchOpen(globalSettings, 'فرع الاستاد');
+                      const stadiumStoredOpen = globalSettings?.branches?.['فرع الاستاد']?.is_open ?? false;
+                      const stadiumAutoClose = globalSettings?.branches?.['فرع الاستاد']?.auto_close_enabled ?? true;
+                      const isStadiumOffHoursLocked = inOffHours && !stadiumStoredOpen && stadiumAutoClose;
                       return (
-                        <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50/70 space-y-4">
+                        <div className={clsx(
+                          "p-5 rounded-2xl border space-y-4",
+                          isStadiumOpen ? "border-green-200 bg-green-50/50" : isStadiumOffHoursLocked ? "border-amber-200 bg-amber-50/30" : "border-slate-200 bg-slate-50/70"
+                        )}>
                           <div className="flex items-center justify-between">
                             <span className="font-black text-slate-900 flex items-center gap-2">
                               <Store className="w-4 h-4 text-amber-600" />
                               <span>فرع الاستاد</span>
+                              {isStadiumOpen && <span className="text-[10px] font-bold bg-green-200 text-green-800 px-1.5 py-0.5 rounded-full">مفتوح</span>}
+                              {!isStadiumOpen && isStadiumOffHoursLocked && <span className="text-[10px] font-bold bg-amber-200 text-amber-800 px-1.5 py-0.5 rounded-full">خارج الوردية</span>}
+                              {!isStadiumOpen && !isStadiumOffHoursLocked && <span className="text-[10px] font-bold bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded-full">في انتظار الفتح</span>}
                             </span>
                             <button
+                              type="button"
                               onClick={() => handleToggleBranch('فرع الاستاد')}
+                              disabled={isStadiumOffHoursLocked}
+                              title={isStadiumOffHoursLocked ? 'لا يمكن الفتح خارج ساعات العمل طالما الإغلاق التلقائي مفعل' : undefined}
                               className={clsx(
-                                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold text-xs transition-all shadow-xs active:scale-95 cursor-pointer",
-                                isStadiumOpen
-                                  ? "bg-green-100 text-green-700 hover:bg-green-200 border border-green-200"
-                                  : "bg-red-100 text-red-700 hover:bg-red-200 border border-red-200"
+                                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold text-xs transition-all shadow-xs",
+                                isStadiumOffHoursLocked
+                                  ? "bg-amber-50 text-amber-600 border border-amber-200 cursor-not-allowed opacity-60"
+                                  : isStadiumOpen
+                                    ? "bg-green-100 text-green-700 hover:bg-green-200 border border-green-200 active:scale-95 cursor-pointer"
+                                    : "bg-blue-100 text-blue-700 hover:bg-blue-200 border border-blue-200 active:scale-95 cursor-pointer"
                               )}
                             >
-                              {isStadiumOpen ? (
-                                <><ToggleRight className="w-4 h-4" /> مفتوح</>
+                              {isStadiumOffHoursLocked ? (
+                                <><Lock className="w-3.5 h-3.5" /> مقفل (2ص–12ظ)</>
+                              ) : isStadiumOpen ? (
+                                <><ToggleRight className="w-4 h-4" /> إغلاق</>
                               ) : (
-                                <><ToggleLeft className="w-4 h-4" /> مغلق</>
+                                <><Unlock className="w-4 h-4" /> افتحه الآن</>
                               )}
                             </button>
                           </div>
+
+                          {/* Dedicated Auto-Close Toggle Row */}
+                          <div className={clsx(
+                            "flex items-center justify-between gap-3 p-3 rounded-xl border transition-all",
+                            stadiumAutoClose ? "bg-white/80 border-slate-200" : "bg-amber-50/50 border-amber-200"
+                          )}>
+                            <div className="space-y-0.5 min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <Moon className={clsx("w-3.5 h-3.5 shrink-0", stadiumAutoClose ? "text-slate-600" : "text-amber-600")} />
+                                <span className="text-xs font-bold text-slate-800 truncate">
+                                  الإغلاق التلقائي بعد مواعيد العمل (2:00 ص)
+                                </span>
+                                <span className={clsx(
+                                  "text-[9px] font-black px-1.5 py-0.5 rounded-full border shrink-0",
+                                  stadiumAutoClose
+                                    ? "bg-emerald-100 text-emerald-800 border-emerald-200"
+                                    : "bg-amber-100 text-amber-800 border-amber-200"
+                                )}>
+                                  {stadiumAutoClose ? 'مفعل' : 'معطل'}
+                                </span>
+                              </div>
+                              <p className="text-[10px] text-slate-500 line-clamp-2 leading-tight">
+                                عند التفعيل، يتم إغلاق الفرع تلقائياً الساعة 2:00 صباحاً وحتى تقوم بفتحه يدوياً. عند الإيقاف، يظل الفرع مفتوحاً أو تحت التحكم اليدوي الكامل.
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleAutoClose('فرع الاستاد')}
+                              className={clsx(
+                                "flex items-center gap-1 px-2.5 py-1.5 rounded-lg font-bold text-[11px] transition-all shrink-0 cursor-pointer active:scale-95",
+                                stadiumAutoClose
+                                  ? "bg-emerald-600 text-white hover:bg-emerald-700 shadow-xs"
+                                  : "bg-slate-200 text-slate-700 hover:bg-slate-300"
+                              )}
+                            >
+                              {stadiumAutoClose ? (
+                                <><ToggleRight className="w-3.5 h-3.5" /> مفعل</>
+                              ) : (
+                                <><ToggleLeft className="w-3.5 h-3.5 text-slate-500" /> معطل</>
+                              )}
+                            </button>
+                          </div>
+
                           <div className="space-y-1.5">
                             <label className="text-xs font-bold text-slate-600">رسالة إغلاق فرع الاستاد:</label>
                             <textarea
@@ -1744,32 +2009,92 @@ export const AdminView: React.FC = () => {
                       );
                     })()}
 
+
                     {/* فرع الكرفان */}
                     {(() => {
                       const isCaravanOpen = isBranchOpen(globalSettings, 'فرع الكرفان');
+                      const caravanStoredOpen = globalSettings?.branches?.['فرع الكرفان']?.is_open ?? false;
+                      const caravanAutoClose = globalSettings?.branches?.['فرع الكرفان']?.auto_close_enabled ?? true;
+                      const isCaravanOffHoursLocked = inOffHours && !caravanStoredOpen && caravanAutoClose;
                       return (
-                        <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50/70 space-y-4">
+                        <div className={clsx(
+                          "p-5 rounded-2xl border space-y-4",
+                          isCaravanOpen ? "border-green-200 bg-green-50/50" : isCaravanOffHoursLocked ? "border-amber-200 bg-amber-50/30" : "border-slate-200 bg-slate-50/70"
+                        )}>
                           <div className="flex items-center justify-between">
                             <span className="font-black text-slate-900 flex items-center gap-2">
                               <Truck className="w-4 h-4 text-teal-600" />
                               <span>فرع الكرفان</span>
+                              {isCaravanOpen && <span className="text-[10px] font-bold bg-green-200 text-green-800 px-1.5 py-0.5 rounded-full">مفتوح</span>}
+                              {!isCaravanOpen && isCaravanOffHoursLocked && <span className="text-[10px] font-bold bg-amber-200 text-amber-800 px-1.5 py-0.5 rounded-full">خارج الوردية</span>}
+                              {!isCaravanOpen && !isCaravanOffHoursLocked && <span className="text-[10px] font-bold bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded-full">في انتظار الفتح</span>}
                             </span>
                             <button
+                              type="button"
                               onClick={() => handleToggleBranch('فرع الكرفان')}
+                              disabled={isCaravanOffHoursLocked}
+                              title={isCaravanOffHoursLocked ? 'لا يمكن الفتح خارج ساعات العمل طالما الإغلاق التلقائي مفعل' : undefined}
                               className={clsx(
-                                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold text-xs transition-all shadow-xs active:scale-95 cursor-pointer",
-                                isCaravanOpen
-                                  ? "bg-green-100 text-green-700 hover:bg-green-200 border border-green-200"
-                                  : "bg-red-100 text-red-700 hover:bg-red-200 border border-red-200"
+                                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold text-xs transition-all shadow-xs",
+                                isCaravanOffHoursLocked
+                                  ? "bg-amber-50 text-amber-600 border border-amber-200 cursor-not-allowed opacity-60"
+                                  : isCaravanOpen
+                                    ? "bg-green-100 text-green-700 hover:bg-green-200 border border-green-200 active:scale-95 cursor-pointer"
+                                    : "bg-blue-100 text-blue-700 hover:bg-blue-200 border border-blue-200 active:scale-95 cursor-pointer"
                               )}
                             >
-                              {isCaravanOpen ? (
-                                <><ToggleRight className="w-4 h-4" /> مفتوح</>
+                              {isCaravanOffHoursLocked ? (
+                                <><Lock className="w-3.5 h-3.5" /> مقفل (2ص–12ظ)</>
+                              ) : isCaravanOpen ? (
+                                <><ToggleRight className="w-4 h-4" /> إغلاق</>
                               ) : (
-                                <><ToggleLeft className="w-4 h-4" /> مغلق</>
+                                <><Unlock className="w-4 h-4" /> افتحه الآن</>
                               )}
                             </button>
                           </div>
+
+                          {/* Dedicated Auto-Close Toggle Row */}
+                          <div className={clsx(
+                            "flex items-center justify-between gap-3 p-3 rounded-xl border transition-all",
+                            caravanAutoClose ? "bg-white/80 border-slate-200" : "bg-amber-50/50 border-amber-200"
+                          )}>
+                            <div className="space-y-0.5 min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <Moon className={clsx("w-3.5 h-3.5 shrink-0", caravanAutoClose ? "text-slate-600" : "text-amber-600")} />
+                                <span className="text-xs font-bold text-slate-800 truncate">
+                                  الإغلاق التلقائي بعد مواعيد العمل (2:00 ص)
+                                </span>
+                                <span className={clsx(
+                                  "text-[9px] font-black px-1.5 py-0.5 rounded-full border shrink-0",
+                                  caravanAutoClose
+                                    ? "bg-emerald-100 text-emerald-800 border-emerald-200"
+                                    : "bg-amber-100 text-amber-800 border-amber-200"
+                                )}>
+                                  {caravanAutoClose ? 'مفعل' : 'معطل'}
+                                </span>
+                              </div>
+                              <p className="text-[10px] text-slate-500 line-clamp-2 leading-tight">
+                                عند التفعيل، يتم إغلاق الفرع تلقائياً الساعة 2:00 صباحاً وحتى تقوم بفتحه يدوياً. عند الإيقاف، يظل الفرع مفتوحاً أو تحت التحكم اليدوي الكامل.
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleAutoClose('فرع الكرفان')}
+                              className={clsx(
+                                "flex items-center gap-1 px-2.5 py-1.5 rounded-lg font-bold text-[11px] transition-all shrink-0 cursor-pointer active:scale-95",
+                                caravanAutoClose
+                                  ? "bg-emerald-600 text-white hover:bg-emerald-700 shadow-xs"
+                                  : "bg-slate-200 text-slate-700 hover:bg-slate-300"
+                              )}
+                            >
+                              {caravanAutoClose ? (
+                                <><ToggleRight className="w-3.5 h-3.5" /> مفعل</>
+                              ) : (
+                                <><ToggleLeft className="w-3.5 h-3.5 text-slate-500" /> معطل</>
+                              )}
+                            </button>
+                          </div>
+
                           <div className="space-y-1.5">
                             <label className="text-xs font-bold text-slate-600">رسالة إغلاق فرع الكرفان:</label>
                             <textarea
@@ -1783,6 +2108,7 @@ export const AdminView: React.FC = () => {
                         </div>
                       );
                     })()}
+
                   </div>
                 </div>
 
@@ -2429,86 +2755,172 @@ export const AdminView: React.FC = () => {
                               </div>
                             ) : (
                               /* ── Normal Display ── */
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-3">
-                                  {/* Toggle Switch */}
-                                  {(() => {
-                                    const isOptBranchAvailable = adminBranchScope !== 'all'
-                                      ? (option.branch_availability?.[adminBranchScope] !== undefined
-                                          ? option.branch_availability[adminBranchScope]
-                                          : option.is_active)
-                                      : option.is_active;
-
-                                    return (
+                              <div className="space-y-2.5">
+                                <div className="flex items-center justify-between gap-3">
+                                  <div className="flex items-center gap-2.5 min-w-0">
+                                    {/* Toggle Switch */}
+                                    {branchAdminTarget ? (
+                                      /* Branch Admin Single Toggle */
                                       <button
+                                        type="button"
                                         onClick={async () => {
-                                          if (adminBranchScope !== 'all') {
-                                            const nextVal = !isOptBranchAvailable;
-                                            await updateOption(option.id, {
-                                              branch_availability: {
-                                                ...(option.branch_availability || {}),
-                                                [adminBranchScope]: nextVal,
-                                              }
-                                            });
-                                            toast.success(nextVal ? `تم إتاحة "${option.name_ar}" في ${adminBranchScope}` : `تم إيقاف "${option.name_ar}" في ${adminBranchScope}`);
-                                          } else {
-                                            try {
-                                              await toggleOptionActive(option.id);
-                                              toast.success(option.is_active ? `تم إيقاف "${option.name_ar}"` : `تم تفعيل "${option.name_ar}"`);
-                                            } catch {
-                                              toast.error('حدث خطأ أثناء تغيير الحالة');
-                                            }
+                                          try {
+                                            const isCurrentBranchAvailable = isOptionAvailableInBranch(option, branchAdminTarget);
+                                            const nextVal = !isCurrentBranchAvailable;
+                                            await toggleOptionBranchAvailability(option.id, branchAdminTarget);
+                                            toast.success(
+                                              nextVal
+                                                ? `تم إتاحة "${option.name_ar}" في ${branchAdminTarget}`
+                                                : `تم إيقاف "${option.name_ar}" في ${branchAdminTarget}`
+                                            );
+                                          } catch (err) {
+                                            console.error('Error toggling branch sauce availability:', err);
+                                            toast.error('حدث خطأ أثناء تعديل توفر الصوص');
                                           }
                                         }}
-                                        className="transition-all cursor-pointer"
-                                        title={adminBranchScope !== 'all' ? `تغيير توفر الصوص في ${adminBranchScope}` : 'تغيير توفر الصوص العام'}
+                                        className="transition-all cursor-pointer shrink-0"
+                                        title={`تغيير توفر الصوص في ${branchAdminTarget}`}
                                       >
-                                        {isOptBranchAvailable ? (
+                                        {isOptionAvailableInBranch(option, branchAdminTarget) ? (
                                           <ToggleRight className="w-8 h-8 text-green-500" />
                                         ) : (
                                           <ToggleLeft className="w-8 h-8 text-slate-300" />
                                         )}
                                       </button>
-                                    );
-                                  })()}
-                                  <div>
-                                    <p className={clsx(
-                                      "text-sm font-bold",
-                                      (adminBranchScope !== 'all'
-                                        ? (option.branch_availability?.[adminBranchScope] !== undefined ? option.branch_availability[adminBranchScope] : option.is_active)
-                                        : option.is_active) ? "text-slate-800" : "text-slate-400 line-through"
-                                    )}>
-                                      {option.name_ar}
-                                      {adminBranchScope !== 'all' && (
-                                        <span className="text-[10px] font-normal text-slate-400 mr-1.5">({adminBranchScope})</span>
-                                      )}
-                                    </p>
-                                    {option.price_delta > 0 && (
-                                      <p className="text-xs text-slate-400">+{option.price_delta} ج.م</p>
+                                    ) : (
+                                      /* Super Admin Global Toggle */
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          try {
+                                            await toggleOptionActive(option.id);
+                                            const isNowActive = option.is_active !== false && (option as any).available !== false;
+                                            toast.success(isNowActive ? `تم إيقاف "${option.name_ar}" عام` : `تم تفعيل "${option.name_ar}" عام`);
+                                          } catch {
+                                            toast.error('حدث خطأ أثناء تغيير الحالة');
+                                          }
+                                        }}
+                                        className="transition-all cursor-pointer shrink-0"
+                                        title="تغيير التوفر العام (كافة الفروع)"
+                                      >
+                                        {(option.is_active !== false && (option as any).available !== false) ? (
+                                          <ToggleRight className="w-8 h-8 text-green-500" />
+                                        ) : (
+                                          <ToggleLeft className="w-8 h-8 text-slate-300" />
+                                        )}
+                                      </button>
                                     )}
+
+                                    <div className="min-w-0">
+                                      <p className={clsx(
+                                        "text-sm font-bold truncate",
+                                        (branchAdminTarget
+                                          ? isOptionAvailableInBranch(option, branchAdminTarget)
+                                          : (option.is_active !== false && (option as any).available !== false)) ? "text-slate-800" : "text-slate-400 line-through"
+                                      )}>
+                                        {option.name_ar}
+                                        {branchAdminTarget && (
+                                          <span className="text-[10px] font-normal text-slate-400 mr-1.5">({branchAdminTarget})</span>
+                                        )}
+                                      </p>
+                                      <div className="flex items-center gap-2">
+                                        {option.price_delta > 0 ? (
+                                          <span className="text-xs text-slate-500 font-semibold">+{option.price_delta} ج.م</span>
+                                        ) : (
+                                          <span className="text-[11px] text-slate-400">مجاناً</span>
+                                        )}
+                                        {branchAdminTarget ? (
+                                          <span className={clsx(
+                                            "text-[10px] font-bold px-1.5 py-0.5 rounded",
+                                            isOptionAvailableInBranch(option, branchAdminTarget) ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"
+                                          )}>
+                                            {isOptionAvailableInBranch(option, branchAdminTarget) ? `متاح في ${branchAdminTarget}` : `غير متاح في ${branchAdminTarget}`}
+                                          </span>
+                                        ) : (
+                                          <span className={clsx(
+                                            "text-[10px] font-bold px-1.5 py-0.5 rounded",
+                                            (option.is_active !== false && (option as any).available !== false) ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"
+                                          )}>
+                                            {(option.is_active !== false && (option as any).available !== false) ? 'متاح عام' : 'معطل عام'}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditingSauceId(option.id);
+                                        setEditSauceName(option.name_ar);
+                                        setEditSaucePrice(option.price_delta);
+                                      }}
+                                      className="p-1.5 hover:bg-slate-100 rounded-lg transition-all text-slate-400 hover:text-slate-600 cursor-pointer"
+                                      title="تعديل"
+                                    >
+                                      <Pencil className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setDeletingId(option.id)}
+                                      className="p-1.5 hover:bg-red-50 rounded-lg transition-all text-red-400 hover:text-red-600 cursor-pointer"
+                                      title="حذف"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
                                   </div>
                                 </div>
 
-                                <div className="flex items-center gap-1">
-                                  <button
-                                    onClick={() => {
-                                      setEditingSauceId(option.id);
-                                      setEditSauceName(option.name_ar);
-                                      setEditSaucePrice(option.price_delta);
-                                    }}
-                                    className="p-2 hover:bg-slate-100 rounded-lg transition-all"
-                                    title="تعديل"
-                                  >
-                                    <Pencil className="w-3.5 h-3.5 text-slate-400" />
-                                  </button>
-                                  <button
-                                    onClick={() => setDeletingId(option.id)}
-                                    className="p-2 hover:bg-red-50 rounded-lg transition-all"
-                                    title="حذف"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5 text-red-400" />
-                                  </button>
-                                </div>
+                                {/* Quick per-branch toggles for Super Admin */}
+                                {!branchAdminTarget && (
+                                  <div className="grid grid-cols-2 gap-1.5 pt-2 border-t border-slate-100">
+                                    {(() => {
+                                      const isStadiumAvailable = isOptionAvailableInBranch(option, 'فرع الاستاد');
+                                      const isCaravanAvailable = isOptionAvailableInBranch(option, 'فرع الكرفان');
+
+                                      return (
+                                        <>
+                                          <button
+                                            type="button"
+                                            onClick={async () => {
+                                              const nextVal = !isStadiumAvailable;
+                                              await toggleOptionBranchAvailability(option.id, 'فرع الاستاد');
+                                              toast.success(nextVal ? `تم إتاحة "${option.name_ar}" في فرع الاستاد` : `تم إيقاف "${option.name_ar}" في فرع الاستاد`);
+                                            }}
+                                            className={clsx(
+                                              "px-2 py-1.5 rounded-lg text-[11px] font-bold border transition-all flex items-center justify-center gap-1 cursor-pointer",
+                                              isStadiumAvailable
+                                                ? "bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100"
+                                                : "bg-red-50 text-red-700 border-red-200 hover:bg-red-100"
+                                            )}
+                                          >
+                                            <div className={clsx("w-1.5 h-1.5 rounded-full", isStadiumAvailable ? "bg-emerald-500" : "bg-red-500")} />
+                                            <span>الاستاد: {isStadiumAvailable ? 'متاح' : 'غير متاح'}</span>
+                                          </button>
+
+                                          <button
+                                            type="button"
+                                            onClick={async () => {
+                                              const nextVal = !isCaravanAvailable;
+                                              await toggleOptionBranchAvailability(option.id, 'فرع الكرفان');
+                                              toast.success(nextVal ? `تم إتاحة "${option.name_ar}" في فرع الكرفان` : `تم إيقاف "${option.name_ar}" في فرع الكرفان`);
+                                            }}
+                                            className={clsx(
+                                              "px-2 py-1.5 rounded-lg text-[11px] font-bold border transition-all flex items-center justify-center gap-1 cursor-pointer",
+                                              isCaravanAvailable
+                                                ? "bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100"
+                                                : "bg-red-50 text-red-700 border-red-200 hover:bg-red-100"
+                                            )}
+                                          >
+                                            <div className={clsx("w-1.5 h-1.5 rounded-full", isCaravanAvailable ? "bg-emerald-500" : "bg-red-500")} />
+                                            <span>الكرفان: {isCaravanAvailable ? 'متاح' : 'غير متاح'}</span>
+                                          </button>
+                                        </>
+                                      );
+                                    })()}
+                                  </div>
+                                )}
                               </div>
                             )}
                           </div>

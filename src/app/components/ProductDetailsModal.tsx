@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { X, Plus, Minus, ShoppingBag } from 'lucide-react';
 import { Product, useStore } from '../store/useStore';
 import { motion, AnimatePresence, useDragControls } from 'motion/react';
@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import { OptionGroupSelector } from './OptionGroupSelector';
 import { computeOptionsPrice } from '../utils/price';
 import { clsx } from 'clsx';
-import { isProductAvailableInBranch } from '../utils/branchAvailability';
+import { isProductAvailableInBranch, isOptionAvailableInBranch } from '../utils/branchAvailability';
 
 interface ProductDetailsModalProps {
     product: Product;
@@ -17,7 +17,7 @@ interface ProductDetailsModalProps {
 const MAX_NOTE_LENGTH = 200;
 
 export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ product: initialProduct, isOpen, onClose }) => {
-    const { addToCartWithDetails, categories, globalSettings, fetchProductOptionGroups, optionGroupsByProductId, products } = useStore();
+    const { addToCartWithDetails, categories, globalSettings, fetchProductOptionGroups, optionGroupsByProductId, allOptionGroups, products, selectedBranch } = useStore();
     const [quantity, setQuantity] = useState(1);
     const [note, setNote] = useState('');
     const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
@@ -39,7 +39,28 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ produc
 
     const isDisabled = isUnavailableInBoth || !!isCategoryInactive || !!isWebsiteClosed;
 
-    const groups = optionGroupsByProductId[product.id] || [];
+    // Dynamically compute groups from live synced allOptionGroups so any admin toggle reflects instantly
+    const groups = useMemo(() => {
+        if (allOptionGroups && allOptionGroups.length > 0) {
+            const matching = allOptionGroups.filter(
+                (g) => !g.product_id || g.product_id === 'all' || g.product_id === product.id
+            );
+            if (matching.length > 0) return matching;
+        }
+        return optionGroupsByProductId[product.id] || [];
+    }, [allOptionGroups, optionGroupsByProductId, product.id]);
+
+    // Automatically clean up any selected options that become disabled in real time
+    useEffect(() => {
+        if (selectedOptions.length === 0) return;
+        const activeOptionIds = new Set(
+            groups.flatMap(g => (g.options || []).filter(o => isOptionAvailableInBranch(o, selectedBranch)).map(o => o.id))
+        );
+        setSelectedOptions(prev => {
+            const valid = prev.filter(id => activeOptionIds.has(id));
+            return valid.length === prev.length ? prev : valid;
+        });
+    }, [groups, selectedBranch]);
 
     // Real-time alert if item becomes unavailable while modal is open
     useEffect(() => {
@@ -83,15 +104,21 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ produc
     const handleAdd = () => {
         if (isDisabled) return;
 
+        // Filter out any options that might have become inactive or unavailable in selectedBranch
+        const activeOptionIds = new Set(
+            groups.flatMap(g => (g.options || []).filter(o => isOptionAvailableInBranch(o, selectedBranch)).map(o => o.id))
+        );
+        const validSelectedOptions = selectedOptions.filter(id => activeOptionIds.has(id));
+
         for (const group of groups) {
-            const groupSelections = selectedOptions.filter(id => group.options?.some(o => o.id === id));
+            const groupSelections = validSelectedOptions.filter(id => group.options?.some(o => o.id === id));
             if (groupSelections.length < group.min_select) {
                 toast.error(`يرجى اختيار ${group.min_select} صنف على الأقل من ${group.name_ar}`);
                 return;
             }
         }
 
-        addToCartWithDetails(product, quantity, note || undefined, selectedOptions);
+        addToCartWithDetails(product, quantity, note || undefined, validSelectedOptions);
         toast.success('تمت الإضافة للسلة', {
             description: `${product.name_ar} × ${quantity}`,
             position: 'bottom-left',
@@ -247,6 +274,7 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ produc
                                         groups={groups}
                                         selectedOptions={selectedOptions}
                                         setSelectedOptions={setSelectedOptions}
+                                        currentBranch={selectedBranch}
                                         variant="modal"
                                     />
                                 </div>

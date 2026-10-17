@@ -23,13 +23,30 @@ service cloud.firestore {
       return isAuthenticated() && (
         request.auth.token.role == 'admin' ||
         request.auth.token.role == 'super_admin' ||
+        request.auth.token.email == 'admin@pochinki.com' ||
         (hasActiveAdminDoc() && (getAdminDoc().data.role == 'admin' || getAdminDoc().data.role == 'super_admin'))
       );
     }
 
+    function isCaravanAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.role == 'caravan_admin' ||
+        request.auth.token.email == 'caravan_admin@pochinki.com' ||
+        (hasActiveAdminDoc() && (getAdminDoc().data.role == 'caravan_admin' || getAdminDoc().data.scope == 'فرع الكرفان'))
+      );
+    }
+
+    function isStadiumAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.role == 'stadium_admin' ||
+        request.auth.token.email == 'stadium_admin@pochinki.com' ||
+        (hasActiveAdminDoc() && (getAdminDoc().data.role == 'stadium_admin' || getAdminDoc().data.scope == 'فرع الاستاد'))
+      );
+    }
+
     function getAdminBranchScope() {
-      return request.auth.token.role == 'stadium_admin' ? 'فرع الاستاد' :
-             request.auth.token.role == 'caravan_admin' ? 'فرع الكرفان' :
+      return (request.auth.token.role == 'stadium_admin' || request.auth.token.email == 'stadium_admin@pochinki.com') ? 'فرع الاستاد' :
+             (request.auth.token.role == 'caravan_admin' || request.auth.token.email == 'caravan_admin@pochinki.com') ? 'فرع الكرفان' :
              hasActiveAdminDoc() ? getAdminDoc().data.scope : '';
     }
 
@@ -37,17 +54,17 @@ service cloud.firestore {
     function canAccessBranch(branchName) {
       return isGlobalAdmin() || (
         (hasActiveAdminDoc() && (getAdminBranchScope() == branchName || getAdminBranchScope() == 'all')) ||
-        (request.auth.token.role == 'stadium_admin' && branchName == 'فرع الاستاد') ||
-        (request.auth.token.role == 'caravan_admin' && branchName == 'فرع الكرفان')
+        (isStadiumAdmin() && branchName == 'فرع الاستاد') ||
+        (isCaravanAdmin() && branchName == 'فرع الكرفان')
       );
     }
 
     function isStaffMember() {
       return isAuthenticated() && (
         isGlobalAdmin() ||
+        isStadiumAdmin() ||
+        isCaravanAdmin() ||
         hasActiveAdminDoc() ||
-        request.auth.token.role == 'stadium_admin' ||
-        request.auth.token.role == 'caravan_admin' ||
         request.auth.token.role == 'kitchen' ||
         request.auth.token.role == 'staff'
       );
@@ -78,18 +95,18 @@ service cloud.firestore {
 
     match /option_groups/{groupId} {
       allow read: if true;
-      allow write: if isGlobalAdmin();
+      allow write: if isGlobalAdmin() || isStaffMember() || isStadiumAdmin() || isCaravanAdmin() || hasActiveAdminDoc();
     }
 
     match /options/{optionId} {
       allow read: if true;
-      allow write: if isGlobalAdmin();
+      allow write: if isGlobalAdmin() || isStaffMember() || isStadiumAdmin() || isCaravanAdmin() || hasActiveAdminDoc();
     }
 
     // Products - Public read; global admin write; branch admin can only update branch_availability
     match /products/{productId} {
       allow read: if true;
-      allow write: if isGlobalAdmin() || (
+      allow write: if isGlobalAdmin() || isStadiumAdmin() || isCaravanAdmin() || (
         hasActiveAdminDoc() &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['branch_availability', 'updated_at'])
       );
@@ -99,7 +116,7 @@ service cloud.firestore {
     match /settings/{settingId} {
       allow read: if true;
       allow write: if isGlobalAdmin() || (
-        hasActiveAdminDoc() &&
+        (hasActiveAdminDoc() || isStadiumAdmin() || isCaravanAdmin()) &&
         settingId == 'global' &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['branches', 'updated_at'])
       );

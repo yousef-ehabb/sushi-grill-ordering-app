@@ -1,13 +1,15 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import { clsx } from 'clsx';
 import { Check } from 'lucide-react';
 import { toast } from 'sonner';
 import type { OptionGroup, ProductOption } from '../store/useStore';
+import { isOptionAvailableInBranch } from '../utils/branchAvailability';
 
 interface OptionGroupSelectorProps {
   groups: OptionGroup[];
   selectedOptions: string[];
   setSelectedOptions: React.Dispatch<React.SetStateAction<string[]>>;
+  currentBranch?: string | null;
   variant?: 'sheet' | 'modal';
 }
 
@@ -15,10 +17,73 @@ export const OptionGroupSelector: React.FC<OptionGroupSelectorProps> = ({
   groups,
   selectedOptions,
   setSelectedOptions,
+  currentBranch,
   variant = 'modal',
 }) => {
+  // Helper to determine if an option is available
+  // Rule: An option is ONLY disabled if globally inactive OR inactive in BOTH branches.
+  // If inactive in only one branch, it remains 100% active, clickable, and selectable.
+  const checkOptionAvailability = useCallback((option: ProductOption) => {
+    const isStadiumAvailable = isOptionAvailableInBranch(option, 'فرع الاستاد');
+    const isCaravanAvailable = isOptionAvailableInBranch(option, 'فرع الكرفان');
+    const isGloballyUnavailable =
+      option.is_active === false ||
+      (option as any).available === false ||
+      (!isStadiumAvailable && !isCaravanAvailable);
+
+    if (isGloballyUnavailable) {
+      return {
+        isAvailable: false,
+        isOptionDisabled: true,
+        branchNotice: 'غير متاح حالياً',
+      };
+    }
+
+    if (!isStadiumAvailable && isCaravanAvailable) {
+      return {
+        isAvailable: true,
+        isOptionDisabled: false,
+        branchNotice: 'غير متاح في فرع الاستاد',
+      };
+    }
+
+    if (!isCaravanAvailable && isStadiumAvailable) {
+      return {
+        isAvailable: true,
+        isOptionDisabled: false,
+        branchNotice: 'غير متاح في فرع الكرفان',
+      };
+    }
+
+    return {
+      isAvailable: true,
+      isOptionDisabled: false,
+      branchNotice: null,
+    };
+  }, []);
+
+  // Automatically deselect any options that become completely unavailable (globally or in both branches)
+  useEffect(() => {
+    if (selectedOptions.length === 0) return;
+    const allSelectableOptions = new Set(
+      groups.flatMap((g) =>
+        (g.options || [])
+          .filter((o) => !checkOptionAvailability(o).isOptionDisabled)
+          .map((o) => o.id)
+      )
+    );
+    setSelectedOptions((prev) => {
+      const filtered = prev.filter((id) => allSelectableOptions.has(id));
+      return filtered.length === prev.length ? prev : filtered;
+    });
+  }, [groups, checkOptionAvailability, setSelectedOptions]);
+
   const handleOptionClick = useCallback((option: ProductOption, group: OptionGroup) => {
-    if (!option.is_active) return;
+    const { isOptionDisabled } = checkOptionAvailability(option);
+    if (isOptionDisabled) {
+      toast.error(`عذراً، "${option.name_ar}" غير متاح حالياً`);
+      return;
+    }
 
     setSelectedOptions((prev) => {
       const isSelected = prev.includes(option.id);
@@ -40,7 +105,7 @@ export const OptionGroupSelector: React.FC<OptionGroupSelectorProps> = ({
 
       return [...prev, option.id];
     });
-  }, [setSelectedOptions]);
+  }, [checkOptionAvailability, setSelectedOptions]);
 
   const getGroupSelectionCount = useCallback((group: OptionGroup) => {
     return selectedOptions.filter((id) => group.options?.some((o) => o.id === id)).length;
@@ -53,7 +118,7 @@ export const OptionGroupSelector: React.FC<OptionGroupSelectorProps> = ({
         const isSingleChoice = group.max_select === 1;
         const optionsList = group.options
           ?.slice()
-          .sort((a, b) => Number(b.is_active) - Number(a.is_active)) || [];
+          .sort((a, b) => Number(checkOptionAvailability(b).isAvailable) - Number(checkOptionAvailability(a).isAvailable)) || [];
 
         return (
           <div key={group.id} className="space-y-2.5">
@@ -90,21 +155,21 @@ export const OptionGroupSelector: React.FC<OptionGroupSelectorProps> = ({
             )}>
               {optionsList.map((option) => {
                 const isSelected = selectedOptions.includes(option.id);
-                const isInactive = !option.is_active;
+                const { isOptionDisabled, branchNotice } = checkOptionAvailability(option);
 
                 return (
                   <button
                     key={option.id}
                     type="button"
-                    disabled={isInactive}
+                    disabled={isOptionDisabled}
                     onClick={() => handleOptionClick(option, group)}
                     className={clsx(
-                      'group/card relative p-3.5 sm:p-4 rounded-2xl border text-right transition-all flex items-center justify-between gap-3 text-sm cursor-pointer select-none min-h-[54px]',
-                      isInactive
-                        ? 'opacity-40 bg-zinc-50 border-zinc-200 text-zinc-400 cursor-not-allowed pointer-events-none'
+                      'group/card relative p-3.5 sm:p-4 rounded-2xl border text-right transition-all flex items-center justify-between gap-3 text-sm select-none min-h-[54px]',
+                      isOptionDisabled
+                        ? 'opacity-60 bg-zinc-50 border-zinc-200/80 text-zinc-400 cursor-not-allowed'
                         : isSelected
-                          ? 'border-[#DC2626] bg-red-50/70 text-zinc-950 shadow-xs ring-1 ring-[#DC2626]/20 font-bold'
-                          : 'border-zinc-200 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 text-zinc-700 active:scale-[0.99]'
+                          ? 'border-[#DC2626] bg-red-50/70 text-zinc-950 shadow-xs ring-1 ring-[#DC2626]/20 font-bold cursor-pointer'
+                          : 'border-zinc-200 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 text-zinc-700 active:scale-[0.99] cursor-pointer'
                     )}
                   >
                     <div className="flex items-center gap-3 min-w-0">
@@ -113,12 +178,14 @@ export const OptionGroupSelector: React.FC<OptionGroupSelectorProps> = ({
                         className={clsx(
                           'w-5 h-5 flex items-center justify-center shrink-0 border transition-all',
                           isSingleChoice ? 'rounded-full' : 'rounded-lg',
-                          isSelected
-                            ? 'bg-[#DC2626] border-[#DC2626] text-white shadow-xs'
-                            : 'border-zinc-300 bg-white group-hover/card:border-zinc-400'
+                          isOptionDisabled
+                            ? 'border-zinc-200 bg-zinc-100 text-zinc-300'
+                            : isSelected
+                              ? 'bg-[#DC2626] border-[#DC2626] text-white shadow-xs'
+                              : 'border-zinc-300 bg-white group-hover/card:border-zinc-400'
                         )}
                       >
-                        {isSelected && (
+                        {isSelected && !isOptionDisabled && (
                           isSingleChoice ? (
                             <div className="w-2 h-2 rounded-full bg-white" />
                           ) : (
@@ -126,14 +193,30 @@ export const OptionGroupSelector: React.FC<OptionGroupSelectorProps> = ({
                           )
                         )}
                       </div>
-                      <span className="truncate text-xs sm:text-sm font-bold text-zinc-800">
-                        {option.name_ar}
-                      </span>
+                      <div className="flex flex-col min-w-0 pr-0.5">
+                        <span className={clsx(
+                          "text-xs sm:text-sm font-bold break-words leading-snug",
+                          isOptionDisabled ? "text-zinc-400 line-through decoration-zinc-300" : "text-zinc-800"
+                        )}>
+                          {option.name_ar}
+                        </span>
+                        {!isOptionDisabled && branchNotice && (
+                          <div className="mt-1">
+                            <span className="inline-flex items-center text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200/80 tracking-tight shrink-0">
+                              {branchNotice}
+                            </span>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
-                    {/* Distinct Price Badge */}
-                    <div className="shrink-0">
-                      {option.price_delta > 0 ? (
+                    {/* Distinct Price or 'غير متاح حالياً' Badge */}
+                    <div className="shrink-0 flex items-center gap-1.5">
+                      {isOptionDisabled ? (
+                        <span className="text-[11px] font-bold px-2 py-0.5 rounded-lg bg-zinc-200/80 text-zinc-600 border border-zinc-300/50">
+                          {branchNotice || 'غير متاح حالياً'}
+                        </span>
+                      ) : option.price_delta > 0 ? (
                         <span
                           className={clsx(
                             'text-xs font-black px-2.5 py-1 rounded-xl border transition-colors',
@@ -160,4 +243,5 @@ export const OptionGroupSelector: React.FC<OptionGroupSelectorProps> = ({
     </div>
   );
 };
+
 
