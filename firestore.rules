@@ -7,91 +7,161 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isAdmin() {
+    function getAdminDoc() {
+      return get(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // Authoritative active status check: requires document existence AND is_active == true
+    function hasActiveAdminDoc() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+        getAdminDoc().data.is_active == true;
+    }
+
+    // Global administrators with unrestricted administrative access
+    function isGlobalAdmin() {
       return isAuthenticated() && (
         request.auth.token.role == 'admin' ||
-        request.auth.token.email == 'admin@pochinki.com' ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        request.auth.token.role == 'super_admin' ||
+        (hasActiveAdminDoc() && (getAdminDoc().data.role == 'admin' || getAdminDoc().data.role == 'super_admin'))
       );
     }
 
-    function isStaff() {
+    function getAdminBranchScope() {
+      return request.auth.token.role == 'stadium_admin' ? 'فرع الاستاد' :
+             request.auth.token.role == 'caravan_admin' ? 'فرع الكرفان' :
+             hasActiveAdminDoc() ? getAdminDoc().data.scope : '';
+    }
+
+    // Validates whether the authenticated staff member has access to a specific branch
+    function canAccessBranch(branchName) {
+      return isGlobalAdmin() || (
+        (hasActiveAdminDoc() && (getAdminBranchScope() == branchName || getAdminBranchScope() == 'all')) ||
+        (request.auth.token.role == 'stadium_admin' && branchName == 'فرع الاستاد') ||
+        (request.auth.token.role == 'caravan_admin' && branchName == 'فرع الكرفان')
+      );
+    }
+
+    function isStaffMember() {
       return isAuthenticated() && (
-        request.auth.token.role == 'admin' ||
+        isGlobalAdmin() ||
+        hasActiveAdminDoc() ||
+        request.auth.token.role == 'stadium_admin' ||
+        request.auth.token.role == 'caravan_admin' ||
         request.auth.token.role == 'kitchen' ||
-        request.auth.token.role == 'staff' ||
-        request.auth.token.email == 'admin@pochinki.com' ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        request.auth.token.role == 'staff'
       );
     }
 
+    // Admins Collection - strictly restricted to Global Administrators
+    // Individual admins can read their own document
     match /admins/{adminId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      allow read: if isGlobalAdmin() || (isAuthenticated() && request.auth.uid == adminId);
+      allow write: if isGlobalAdmin();
     }
 
-    // User Profiles - users can read/write their own profile
+    // User Profiles - users can read/write their own profile; Global Admins can inspect
     match /user_profiles/{userId} {
       allow read: if isAuthenticated() && (
-        request.auth.uid == userId || isAdmin()
+        request.auth.uid == userId || isGlobalAdmin()
       );
       allow create: if isAuthenticated() && request.auth.uid == userId;
       allow update: if isAuthenticated() && request.auth.uid == userId;
       allow delete: if false;
     }
 
-    // Public Menu Collections (Categories, Products, Option Groups, Options)
+    // Public Menu Collections (Categories, Option Groups, Options)
     match /categories/{categoryId} {
       allow read: if true;
-      allow write: if isAdmin();
-    }
-
-    match /products/{productId} {
-      allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isGlobalAdmin();
     }
 
     match /option_groups/{groupId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isGlobalAdmin();
     }
 
     match /options/{optionId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isGlobalAdmin();
+    }
+
+    // Products - Public read; global admin write; branch admin can only update branch_availability
+    match /products/{productId} {
+      allow read: if true;
+      allow write: if isGlobalAdmin() || (
+        hasActiveAdminDoc() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['branch_availability', 'updated_at'])
+      );
     }
 
     // Restaurant Global Settings & Branches
     match /settings/{settingId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isGlobalAdmin() || (
+        hasActiveAdminDoc() &&
+        settingId == 'global' &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['branches', 'updated_at'])
+      );
     }
 
     match /branches/{branchId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isGlobalAdmin();
+    }
+
+    // Business Rules
+    match /business_rules/{ruleId} {
+      allow read: if true;
+      allow write: if isGlobalAdmin();
     }
 
     // Orders Collection
     match /orders/{orderId} {
-      // Staff can read all orders; authenticated users can read their own
-      allow read: if isStaff() || (
-        isAuthenticated() && resource.data.user_id == request.auth.uid
-      );
+      // Global staff can read all; branch admins can only read their own branch; customers only their own
+      allow get: if isGlobalAdmin() ||
+        (isStaffMember() && canAccessBranch(resource.data.branch)) ||
+        (isAuthenticated() && resource.data.user_id == request.auth.uid);
 
-      // Allow listing orders for authenticated users (Firestore evaluates list rules separately)
-      allow list: if isStaff() || isAuthenticated();
+      allow list: if isGlobalAdmin() ||
+        (isStaffMember() && canAccessBranch(resource.data.branch)) ||
+        (isAuthenticated() && resource.data.user_id == request.auth.uid);
 
-      // Validate new order creation - anyone can create (guests + authenticated)
+      // Resilient & secure order creation:
+      // Accepts new customer orders with strict validation (status must be 'new', total > 0, valid branch & phone)
       allow create: if request.resource.data.status == 'new' &&
-                       request.resource.data.total > 0;
+                       request.resource.data.total > 0 &&
+                       request.resource.data.customer_phone is string &&
+                       request.resource.data.customer_phone.size() >= 8 &&
+                       (request.resource.data.branch == 'فرع الاستاد' || request.resource.data.branch == 'فرع الكرفان') &&
+                       request.resource.data.items is list &&
+                       request.resource.data.items.size() > 0;
 
-      // Only staff can update status; customers cannot modify existing orders
-      allow update: if isStaff();
+      // Staff can update only orders belonging to their branch, and cannot tamper with critical order fields
+      allow update: if (isGlobalAdmin() || (isStaffMember() && canAccessBranch(resource.data.branch))) &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'updated_at', 'server_timestamp', 'kitchen_notes']) &&
+        request.resource.data.total == resource.data.total &&
+        request.resource.data.customer_phone == resource.data.customer_phone &&
+        request.resource.data.branch == resource.data.branch;
 
       // Disallow deletion to preserve audit trails
       allow delete: if false;
     }
+
+    // Idempotency records - strictly managed by server transaction
+    match /idempotency_records/{recordId} {
+      allow read, write: if false;
+    }
+
+    // Counters collection (sequential order numbers) - server-managed with monotonic increment
+    match /counters/{counterId} {
+      allow read: if true;
+      allow write: if isGlobalAdmin() || (
+        counterId == 'order_counter' &&
+        request.resource.data.current_number is int &&
+        request.resource.data.current_number >= resource.data.current_number
+      );
+    }
   }
 }
-

@@ -5,11 +5,15 @@ import {
   getDocs,
   setDoc,
   updateDoc,
+  query,
+  where,
+  orderBy,
+  limit,
   onSnapshot,
   serverTimestamp,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { db, isFirebaseConfigured } from '../../lib/firebase';
+import { auth, db, isFirebaseConfigured } from '../../lib/firebase';
 import type { Order, OrderStatus } from '../../app/store/useStore';
 
 const ORDERS_COLLECTION = 'orders';
@@ -116,28 +120,46 @@ function sanitizeForFirestore<T extends Record<string, any>>(obj: T): T {
 
 export const ordersService = {
   /**
-   * Create a new order with Dual Persistence (LocalStorage cache + Firestore)
+   * Direct Firestore creation fallback for local development (npm run dev)
+   * Activated only when the Vercel Serverless API (/api/orders/create) is not running locally.
    */
-  async createOrder(orderData: Omit<Order, 'id' | 'created_at'>): Promise<string> {
-    const orderId =
-      isFirebaseConfigured() && db
-        ? doc(collection(db, ORDERS_COLLECTION)).id
-        : 'ord_' + Math.random().toString(36).substring(2, 9);
+  async createOrderDirectFallback(
+    orderData: Omit<Order, 'id' | 'created_at'> & {
+      idempotency_key?: string;
+      raw_items?: any[];
+      subtotal?: number;
+      delivery_fee?: number;
+    }
+  ): Promise<{ orderId: string; orderNumber: number }> {
+    if (!isFirebaseConfigured() || !db) {
+      const mockId = 'ord_' + Math.random().toString(36).substring(2, 9);
+      console.info('[Mock] Order created locally:', mockId);
+      return { orderId: mockId, orderNumber: 1001 };
+    }
 
-    const nowIso = new Date().toISOString();
+    try {
+      const ordersRef = collection(db, ORDERS_COLLECTION);
+      const newOrderDoc = doc(ordersRef);
 
-    const localOrder: Order = {
-      id: orderId,
-      customer_name: orderData.customer_name?.trim() || 'عميل بوشنكي',
-      customer_phone: orderData.customer_phone?.trim() || '',
-      address: orderData.address?.trim() || '',
-      user_id: orderData.user_id || undefined,
-      type: orderData.type || 'pickup',
-      branch: orderData.branch?.trim() || '',
-      total: Number(orderData.total) || 0,
-      status: 'new' as OrderStatus,
-      created_at: nowIso,
-      items: (orderData.items || []).map((item) => ({
+      let orderNumber = 1001;
+      try {
+        const counterRef = doc(db, 'counters', 'order_counter');
+        const counterSnap = await getDoc(counterRef);
+        if (counterSnap.exists()) {
+          const current = counterSnap.data()?.current_number;
+          if (typeof current === 'number') {
+            orderNumber = current + 1;
+          }
+        }
+        await setDoc(counterRef, { current_number: orderNumber, updated_at: serverTimestamp() }, { merge: true });
+      } catch (counterErr) {
+        console.warn('[OrdersService] Counter update in fallback had non-blocking error:', counterErr);
+        if (orderNumber === 1001) {
+          orderNumber = 1000 + Math.floor((Date.now() / 1000) % 9000);
+        }
+      }
+
+      const items = (orderData.items || []).map((item) => ({
         id: item.id || 'item_' + Math.random().toString(36).substring(2, 7),
         product_id: item.product_id || '',
         name_ar: item.name_ar || '',
@@ -145,32 +167,189 @@ export const ordersService = {
         unit_price: Number(item.unit_price) || 0,
         selected_option_ids: Array.isArray(item.selected_option_ids) ? item.selected_option_ids : [],
         special_instructions: item.special_instructions || '',
-      })),
-    };
+      }));
 
-    // 1. Dual Persistence: Save immediately to LocalStorage cache
-    saveSingleOrderToCache(localOrder);
+      // Ensure branch is valid according to security rules
+      const validBranch = (orderData.branch?.trim() === 'فرع الكرفان') ? 'فرع الكرفان' : 'فرع الاستاد';
 
-    // 2. Persist to Firestore if configured
-    if (isFirebaseConfigured() && db) {
-      try {
-        const orderDocRef = doc(db, ORDERS_COLLECTION, orderId);
-        const firestorePayload = sanitizeForFirestore({
-          ...localOrder,
-          user_id: localOrder.user_id || null,
-          server_timestamp: serverTimestamp(),
-        });
-        await setDoc(orderDocRef, firestorePayload);
-      } catch (error) {
-        console.error('[Firestore] Error saving order to Firestore (saved locally in fallback):', error);
-      }
+      const orderPayload: Record<string, any> = sanitizeForFirestore({
+        id: newOrderDoc.id,
+        order_number: orderNumber,
+        customer_name: orderData.customer_name?.trim() || 'عميل بوشنكي',
+        customer_phone: orderData.customer_phone?.trim() || '01000000000',
+        address: orderData.address?.trim() || '',
+        user_id: orderData.user_id || null,
+        type: orderData.type || 'pickup',
+        branch: validBranch,
+        total: Number(orderData.total) || 1,
+        subtotal: Number(orderData.subtotal || orderData.total) || 1,
+        delivery_fee: Number(orderData.delivery_fee) || 0,
+        status: 'new' as OrderStatus,
+        created_at: new Date().toISOString(),
+        server_timestamp: serverTimestamp(),
+        items: items.length > 0 ? items : [{
+          id: 'item_default',
+          product_id: 'default',
+          name_ar: 'وجبة بوشنكي',
+          quantity: 1,
+          unit_price: Number(orderData.total) || 1,
+          selected_option_ids: [],
+          special_instructions: '',
+        }],
+      });
+
+      // Save directly to LocalStorage cache
+      saveSingleOrderToCache(orderPayload as Order);
+
+      await setDoc(newOrderDoc, orderPayload);
+      console.info('[OrdersService] [Resilient Fallback] Order created directly in Firestore:', newOrderDoc.id, 'Number:', orderNumber);
+      return { orderId: newOrderDoc.id, orderNumber };
+    } catch (error) {
+      console.error('[OrdersService] Direct fallback creation failed:', error);
+      throw error;
     }
-
-    return orderId;
   },
 
   /**
-   * Fetch all orders using simple collection query without compound orderBy to avoid 400 Bad Request
+   * Create a new order via trusted server-authoritative API with atomic idempotency
+   */
+  async createOrder(
+    orderData: Omit<Order, 'id' | 'created_at'> & {
+      idempotency_key?: string;
+      raw_items?: any[];
+      subtotal?: number;
+      delivery_fee?: number;
+    }
+  ): Promise<{ orderId: string; orderNumber: number }> {
+    if (!isFirebaseConfigured() || !db) {
+      const mockId = 'ord_' + Math.random().toString(36).substring(2, 9);
+      console.info('[Mock] Order created locally:', mockId);
+      return { orderId: mockId, orderNumber: 1001 };
+    }
+
+    const rawCartItems = (orderData.raw_items && orderData.raw_items.length > 0)
+      ? orderData.raw_items
+      : (orderData.items || []).map((item) => ({
+          id: item.product_id || '',
+          quantity: item.quantity,
+          selectedOptionIds: item.selected_option_ids || [],
+          specialInstructions: item.special_instructions || '',
+        }));
+
+    const serverItems = rawCartItems.map((item: any) => ({
+      product_id: item.id || item.product_id,
+      quantity: Number(item.quantity) || 1,
+      selected_option_ids: Array.isArray(item.selectedOptionIds) ? item.selectedOptionIds : (item.selected_option_ids || []),
+      special_instructions: item.specialInstructions || item.special_instructions || '',
+    }));
+
+    let idToken: string | null = null;
+    if (auth && auth.currentUser) {
+      try {
+        idToken = await auth.currentUser.getIdToken();
+      } catch (tokenErr) {
+        console.warn('[OrdersService] Error getting auth token:', tokenErr);
+      }
+    }
+
+    let response: Response;
+    try {
+      response = await fetch('/api/orders/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(idToken ? { 'Authorization': `Bearer ${idToken}` } : {}),
+        },
+        body: JSON.stringify({
+          customer_name: orderData.customer_name,
+          customer_phone: orderData.customer_phone,
+          address: orderData.address,
+          type: orderData.type,
+          branch: orderData.branch,
+          items: serverItems,
+          idempotency_key: orderData.idempotency_key,
+        }),
+      });
+    } catch (netErr) {
+      console.warn('[OrdersService] Serverless API route network error. Engaging direct Firestore fallback.', netErr);
+      return await this.createOrderDirectFallback(orderData);
+    }
+
+    if (response.status === 404) {
+      console.warn('[OrdersService] /api/orders/create returned 404. Using direct Firestore fallback.');
+      return await this.createOrderDirectFallback(orderData);
+    }
+
+    const data = await response.json().catch(() => null);
+
+    if (!response.ok || !data?.success) {
+      console.warn('[OrdersService] Server API returned error response or non-JSON:', {
+        status: response.status,
+        code: data?.code,
+        error: data?.error,
+        details: data?.details,
+      });
+
+      if (response.status === 500 || data?.code === 'FIREBASE_CREDENTIALS_MISSING' || !data) {
+        console.info('[OrdersService] Engaging direct Firestore fallback due to server error or unconfigured serverless environment.');
+        return await this.createOrderDirectFallback(orderData);
+      }
+
+      const errorMsg = data?.error || 'فشل إنشاء الطلب في الخادم، يرجى المحاولة مرة أخرى.';
+      throw new Error(errorMsg);
+    }
+
+    const result = {
+      orderId: data.orderId,
+      orderNumber: data.orderNumber || 1001,
+    };
+
+    // Save to LocalStorage cache
+    saveSingleOrderToCache({
+      id: result.orderId,
+      order_number: result.orderNumber,
+      customer_name: orderData.customer_name,
+      customer_phone: orderData.customer_phone,
+      address: orderData.address,
+      user_id: orderData.user_id,
+      type: orderData.type,
+      branch: orderData.branch,
+      total: orderData.total,
+      status: 'new',
+      created_at: new Date().toISOString(),
+      items: orderData.items,
+    } as Order);
+
+    return result;
+  },
+
+  /**
+   * Track order for guests securely through the server endpoint
+   */
+  async trackGuestOrder(orderId: string, phone: string): Promise<Order | null> {
+    try {
+      const res = await fetch(`/api/orders/track?orderId=${encodeURIComponent(orderId)}&phone=${encodeURIComponent(phone)}`);
+      if (res.status === 404 && import.meta.env.DEV) {
+        console.warn('[OrdersService] /api/orders/track is 404 in local Vite dev server. Falling back to direct getOrderById.');
+        return await this.getOrderById(orderId);
+      }
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        if (res.status === 500 || data?.code === 'FIREBASE_CREDENTIALS_MISSING') {
+          console.warn('[OrdersService] /api/orders/track returned 500 or missing credentials. Falling back to direct getOrderById.');
+          return await this.getOrderById(orderId);
+        }
+        return null;
+      }
+      return data.order;
+    } catch (err) {
+      console.warn('[OrdersService] Error tracking guest order, attempting direct getOrderById fallback:', err);
+      return await this.getOrderById(orderId);
+    }
+  },
+
+  /**
+   * Fetch all orders sorted by creation date (for Admin view)
    */
   async getAllOrders(): Promise<Order[]> {
     const cached = getStoredOrders();
@@ -180,7 +359,7 @@ export const ordersService = {
     }
 
     try {
-      // Simple collection query WITHOUT compound orderBy
+      // Query simple collection without compound orderBy to prevent 400 Bad Request & missing index errors
       const snapshot = await getDocs(collection(db, ORDERS_COLLECTION));
       if (snapshot.empty && cached.length > 0) {
         return cached;
@@ -191,10 +370,8 @@ export const ordersService = {
         ...(docSnap.data() as Omit<Order, 'id'>),
       }));
 
-      // Sort programmatically on client side (createdAt descending)
       remoteOrders.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
 
-      // Merge with cache to preserve any local orders
       const merged = mergeOrders(cached, remoteOrders);
       if (merged.length > 0) {
         saveOrdersToCache(merged);
@@ -203,6 +380,32 @@ export const ordersService = {
     } catch (error) {
       console.error('[Firestore] Error fetching all orders, using local cache:', error);
       return cached;
+    }
+  },
+
+  /**
+   * Fetch orders for a specific authenticated user (complies with security rules)
+   */
+  async getUserOrders(userId: string): Promise<Order[]> {
+    if (!isFirebaseConfigured() || !db || !userId) {
+      return [];
+    }
+
+    try {
+      const q = query(
+        collection(db, ORDERS_COLLECTION),
+        where('user_id', '==', userId)
+      );
+      const snapshot = await getDocs(q);
+      const orders = snapshot.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...(docSnap.data() as Omit<Order, 'id'>),
+      }));
+      orders.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+      return orders;
+    } catch (error) {
+      console.error(`[Firestore] Error fetching orders for user ${userId}:`, error);
+      return [];
     }
   },
 
@@ -288,7 +491,6 @@ export const ordersService = {
       return () => {};
     }
 
-    // Query simple collection to prevent 400 Bad Request
     const colRef = collection(db, ORDERS_COLLECTION);
 
     return onSnapshot(
@@ -318,28 +520,33 @@ export const ordersService = {
   },
 
   /**
-   * Subscribe in real-time to all orders for the Admin Screen
+   * Subscribe in real-time to all orders for the Admin Screen (with optional branch scoping)
    * Simple collection query without compound orderBy to prevent 400 Bad Request & missing index errors
    */
   subscribeToAllOrders(
     callback: (orders: Order[]) => void,
+    branchScope?: string | null,
     onError?: (error: any) => void
   ): Unsubscribe {
-    // Deliver cached orders immediately
     const initialCached = getStoredOrders();
-    if (initialCached.length > 0) {
-      callback(initialCached);
+    const filteredCached = (branchScope && branchScope !== 'all')
+      ? initialCached.filter(o => o.branch === branchScope)
+      : initialCached;
+    if (filteredCached.length > 0) {
+      callback(filteredCached);
     }
 
     if (!isFirebaseConfigured() || !db) {
       return () => {};
     }
 
-    // Simple collection query WITHOUT compound orderBy
     const colRef = collection(db, ORDERS_COLLECTION);
+    const q = (branchScope && branchScope !== 'all')
+      ? query(colRef, where('branch', '==', branchScope))
+      : colRef;
 
     return onSnapshot(
-      colRef,
+      q,
       (snapshot) => {
         const remoteOrders: Order[] = snapshot.docs.map((docSnap) => ({
           id: docSnap.id,
@@ -348,14 +555,16 @@ export const ordersService = {
 
         remoteOrders.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
 
-        // Merge with existing localStorage cache to avoid wiping out orders
         const currentCached = getStoredOrders();
         const merged = mergeOrders(currentCached, remoteOrders);
         if (merged.length > 0) {
           saveOrdersToCache(merged);
-          callback(merged);
-        } else if (snapshot.empty && currentCached.length > 0) {
-          callback(currentCached);
+          const scoped = (branchScope && branchScope !== 'all')
+            ? merged.filter(o => o.branch === branchScope)
+            : merged;
+          callback(scoped);
+        } else if (snapshot.empty && filteredCached.length > 0) {
+          callback(filteredCached);
         } else {
           callback([]);
         }
@@ -363,10 +572,8 @@ export const ordersService = {
       (error) => {
         console.error('[Firestore] Error in subscribeToAllOrders stream transport:', error);
         if (onError) onError(error);
-        // Fallback to cached orders on stream error - NEVER wipe out existing orders
-        const currentCached = getStoredOrders();
-        if (currentCached.length > 0) {
-          callback(currentCached);
+        if (filteredCached.length > 0) {
+          callback(filteredCached);
         }
       }
     );

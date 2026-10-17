@@ -184,6 +184,7 @@ export const AdminView: React.FC = () => {
           });
         }
       },
+      adminBranchScope,
       (err) => {
         console.warn('[AdminView] Realtime orders stream error, retained cached orders:', err);
       }
@@ -200,7 +201,7 @@ export const AdminView: React.FC = () => {
       unsubscribeProducts();
       unsubscribeSettings();
     };
-  }, []);
+  }, [adminBranchScope]);
 
   // Sync local state when global data loads
   useEffect(() => {

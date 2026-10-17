@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { doc, updateDoc, collection, getDocs, query, where, addDoc, deleteDoc, setDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db, isFirebaseConfigured } from '../../lib/firebase';
+import { auth, db, isFirebaseConfigured } from '../../lib/firebase';
 import { getStorage } from 'firebase/storage';
 import { toast } from 'sonner';
 import { broadcastSyncEvent } from '../utils/realtimeSync';
@@ -89,12 +89,15 @@ export type OrderStatus = 'new' | 'preparing' | 'ready' | 'out_for_delivery' | '
 
 export type Order = {
   id: string;
+  order_number?: number;
   customer_name: string;
   customer_phone: string;
   address?: string;
   user_id?: string;
   type: 'pickup' | 'delivery';
   branch?: string;
+  subtotal?: number;
+  delivery_fee?: number;
   items: OrderItem[];
   total: number;
   status: OrderStatus;
@@ -180,7 +183,7 @@ interface AppState {
   clearCart: () => void;
 
   // Order Actions
-  submitOrder: (order: Omit<Order, 'id' | 'created_at' | 'status' | 'items'> & { items: CartItem[] }) => Promise<string | null>;
+  submitOrder: (order: Omit<Order, 'id' | 'created_at' | 'status' | 'items'> & { items: CartItem[]; idempotency_key?: string }) => Promise<{ orderId: string; orderNumber: number } | null>;
   reorderFromHistory: (items: OrderItem[]) => { added: number; skipped: string[] };
 
   // Admin Actions
@@ -192,7 +195,7 @@ interface AppState {
   // Sauce Management
   toggleOptionActive: (optionId: string) => Promise<void>;
   createOption: (groupId: string, data: { name_ar: string; price_delta: number }) => Promise<ProductOption | null>;
-  updateOption: (optionId: string, data: Partial<Pick<ProductOption, 'name_ar' | 'price_delta'>>) => Promise<void>;
+  updateOption: (optionId: string, data: Partial<Pick<ProductOption, 'name_ar' | 'price_delta' | 'branch_availability' | 'is_active'>>) => Promise<void>;
   deleteOption: (optionId: string) => Promise<void>;
 
   // Operational Control Actions
@@ -350,6 +353,7 @@ export const useStore = create<AppState>()(
 
       fetchOrders: async () => {
         try {
+          const authUser = auth?.currentUser;
           const orders = await ordersService.getAllOrders();
           if (orders && orders.length > 0) {
             set((state) => {
@@ -357,6 +361,11 @@ export const useStore = create<AppState>()(
               saveOrdersToCache(merged);
               return { orders: merged };
             });
+          } else if (authUser) {
+            const userOrders = await ordersService.getUserOrders(authUser.uid);
+            if (userOrders && userOrders.length > 0) {
+              set({ orders: userOrders });
+            }
           }
         } catch (error) {
           console.error('Failed to fetch orders, retaining cached orders:', error);
@@ -365,7 +374,15 @@ export const useStore = create<AppState>()(
 
       fetchActiveOrder: async () => {
         try {
-          const orders = get().orders.length > 0 ? get().orders : await ordersService.getAllOrders();
+          const authUser = auth?.currentUser;
+          let orders = get().orders;
+          if (orders.length === 0) {
+            if (authUser) {
+              orders = await ordersService.getUserOrders(authUser.uid);
+            } else {
+              orders = await ordersService.getAllOrders();
+            }
+          }
           const active = orders.find(
             (o) => o.status !== 'completed' && o.status !== 'cancelled'
           );
@@ -549,20 +566,20 @@ export const useStore = create<AppState>()(
             return null;
           }
 
-          const clientComputedTotal = orderData.items.reduce((sum, item) => {
-            const itemTotal = (item.price + (item.optionsPrice || 0)) * item.quantity;
-            return sum + itemTotal;
-          }, 0);
+          const idempotencyKey = orderData.idempotency_key || `idemp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
-          const orderId = await ordersService.createOrder({
+          const result = await ordersService.createOrder({
             customer_name: orderData.customer_name,
             customer_phone: orderData.customer_phone,
             address: orderData.address,
             user_id: orderData.user_id,
             type: orderData.type,
             branch: orderData.branch,
-            total: clientComputedTotal,
+            total: orderData.total || 0,
+            subtotal: orderData.total || 0,
             status: 'new',
+            idempotency_key: idempotencyKey,
+            raw_items: orderData.items,
             items: orderData.items.map((item) => ({
               id: 'item_' + Math.random().toString(36).substring(2, 7),
               product_id: item.id,
@@ -575,40 +592,52 @@ export const useStore = create<AppState>()(
           });
 
           // Optimistically update orders in store with new order so admin/user sees it instantly
-          const newOrder: Order = {
-            id: orderId,
-            customer_name: orderData.customer_name,
-            customer_phone: orderData.customer_phone,
-            address: orderData.address,
-            user_id: orderData.user_id,
-            type: orderData.type,
-            branch: orderData.branch,
-            total: clientComputedTotal,
-            status: 'new',
-            created_at: new Date().toISOString(),
-            items: orderData.items.map((item) => ({
-              id: 'item_' + Math.random().toString(36).substring(2, 7),
-              product_id: item.id,
-              name_ar: item.name_ar,
-              quantity: item.quantity,
-              unit_price: (item.price ?? 0) + (item.optionsPrice ?? 0),
-              selected_option_ids: item.selectedOptionIds,
-              special_instructions: item.specialInstructions,
-            })),
-          };
+          const orderId = result?.orderId;
+          const orderNumber = result?.orderNumber || 1001;
+          if (orderId) {
+            const newOrder: Order = {
+              id: orderId,
+              order_number: orderNumber,
+              customer_name: orderData.customer_name,
+              customer_phone: orderData.customer_phone,
+              address: orderData.address,
+              user_id: orderData.user_id,
+              type: orderData.type,
+              branch: orderData.branch,
+              total: clientComputedTotal,
+              status: 'new',
+              created_at: new Date().toISOString(),
+              items: orderData.items.map((item) => ({
+                id: 'item_' + Math.random().toString(36).substring(2, 7),
+                product_id: item.id,
+                name_ar: item.name_ar,
+                quantity: item.quantity,
+                unit_price: (item.price ?? 0) + (item.optionsPrice ?? 0),
+                selected_option_ids: item.selectedOptionIds,
+                special_instructions: item.specialInstructions,
+              })),
+            };
 
-          set((state) => {
-            const updated = [newOrder, ...state.orders.filter((o) => o.id !== orderId)];
-            saveOrdersToCache(updated);
-            return { orders: updated, loading: false };
-          });
+            set((state) => {
+              const updated = [newOrder, ...state.orders.filter((o) => o.id !== orderId)];
+              saveOrdersToCache(updated);
+              return { orders: updated, loading: false };
+            });
 
-          broadcastSyncEvent({
-            type: 'ORDER_CREATED',
-            order: newOrder,
-          });
+            broadcastSyncEvent({
+              type: 'ORDER_CREATED',
+              order: newOrder,
+            });
+            broadcastSyncEvent({
+              type: 'ORDER_EVENT_NOTIFICATION',
+              orderId,
+              action: 'created',
+            });
+          } else {
+            set({ loading: false });
+          }
 
-          return orderId;
+          return result;
         } catch (err: any) {
           set({ loading: false, error: err.message || 'فشل إنشاء الطلب' });
           console.error('Order submission failed:', err);
@@ -715,6 +744,11 @@ export const useStore = create<AppState>()(
 
         try {
           await ordersService.updateOrderStatus(orderId, status);
+          broadcastSyncEvent({
+            type: 'ORDER_EVENT_NOTIFICATION',
+            orderId,
+            action: 'status_changed',
+          });
         } catch (error) {
           console.error('Failed to update order status:', error);
           get().fetchOrders();

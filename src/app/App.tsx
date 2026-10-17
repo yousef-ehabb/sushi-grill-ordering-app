@@ -26,6 +26,7 @@ const CustomerLayout: React.FC = () => {
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [isActiveOrderOpen, setIsActiveOrderOpen] = useState(false);
+  const [guestTrackingParams, setGuestTrackingParams] = useState<{ orderId: string; phone: string } | null>(null);
   const {
     cart,
     globalSettings,
@@ -36,7 +37,8 @@ const CustomerLayout: React.FC = () => {
     updateProductAvailabilityLocal,
     updateGlobalSettingsLocal,
     activeOrder,
-    fetchActiveOrder
+    fetchActiveOrder,
+    fetchOrders,
   } = useStore();
   const { isAuthenticated, user, initSession } = useAuthStore();
   const isOpen = globalSettings?.is_website_open ?? true;
@@ -78,6 +80,9 @@ const CustomerLayout: React.FC = () => {
         useStore.setState({
           orders: currentOrders.map((o) => (o.id === event.orderId ? { ...o, status: event.status } : o)),
         });
+      } else if (event.type === 'ORDER_EVENT_NOTIFICATION') {
+        // Notification-only: trigger authorized re-fetch from Firestore source-of-truth without bypassing security
+        fetchOrders();
       } else if (event.type === 'FORCE_REFRESH') {
         fetchProducts();
         fetchGlobalSettings();
@@ -205,8 +210,8 @@ const CustomerLayout: React.FC = () => {
               <Phone className="w-4 h-4 text-amber-400" />
             </a>
 
-            {/* Active Order Pill if active */}
-            {isAuthenticated && activeOrder && (
+            {/* Active Order Pill if authenticated with active order, or Track Order Button */}
+            {isAuthenticated && activeOrder ? (
               <button
                 onClick={() => setIsActiveOrderOpen(true)}
                 className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-xs transition-all ${
@@ -221,6 +226,23 @@ const CustomerLayout: React.FC = () => {
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
                 </span>
                 <span className="hidden sm:inline">طلبك نشط</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  setGuestTrackingParams(null);
+                  setIsActiveOrderOpen(true);
+                }}
+                className={`flex items-center gap-1.5 font-bold text-xs sm:text-sm h-9 px-2.5 sm:h-10 sm:px-3 rounded-xl transition-all ${
+                  isScrolled
+                    ? 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'
+                    : 'bg-white/15 text-white hover:bg-white/25 backdrop-blur-sm border border-white/15'
+                }`}
+                title="تتبع حالة طلبك"
+                aria-label="تتبع الطلب"
+              >
+                <ClipboardList className="w-4 h-4 text-amber-400" />
+                <span className="hidden md:inline">تتبع طلبك</span>
               </button>
             )}
 
@@ -372,11 +394,19 @@ const CustomerLayout: React.FC = () => {
       <CheckoutModal
         isOpen={isCheckoutOpen}
         onClose={() => setIsCheckoutOpen(false)}
+        onOpenTracking={(orderId, phone) => {
+          setGuestTrackingParams({ orderId, phone });
+          setIsActiveOrderOpen(true);
+        }}
       />
       <ActiveOrderModal
-        orderId={activeOrder?.id ?? null}
+        orderId={activeOrder?.id ?? guestTrackingParams?.orderId ?? null}
+        guestPhone={guestTrackingParams?.phone ?? null}
         isOpen={isActiveOrderOpen}
-        onClose={() => setIsActiveOrderOpen(false)}
+        onClose={() => {
+          setIsActiveOrderOpen(false);
+          setGuestTrackingParams(null);
+        }}
         onBrowseMenu={() => document.getElementById('menu')?.scrollIntoView({ behavior: 'smooth' })}
       />
     </div>

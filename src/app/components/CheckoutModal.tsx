@@ -1,15 +1,17 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, CheckCircle2, Truck, Store, MapPin, Phone, User, Loader2, ArrowLeft, UserCheck, AlertTriangle } from 'lucide-react';
+import { X, CheckCircle2, Truck, Store, MapPin, Phone, User, Loader2, ArrowLeft, UserCheck, AlertTriangle, Printer, Copy, Check } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { clsx } from 'clsx';
 import { isProductAvailableInBranch, isBranchOpen, getBranchClosedMessage } from '../utils/branchAvailability';
+import { restaurantConfig } from '../../config/restaurant';
 
 interface CheckoutModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onOpenTracking?: (orderId: string, phone: string) => void;
 }
 
 const EGYPTIAN_PHONE_REGEX = /^01[0125][0-9]{8}$/;
@@ -31,7 +33,7 @@ const sanitizeEgyptianPhone = (value: string): string => {
   return cleaned.slice(0, 11);
 };
 
-export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose }) => {
+export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, onOpenTracking }) => {
   const { cart, products, globalSettings, orderType, setOrderType, clearCart, submitOrder, loading } = useStore();
   const { user, isAuthenticated } = useAuthStore();
   const [step, setStep] = useState(1);
@@ -41,6 +43,25 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
     phone: '',
     address: '',
   });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [idempotencyKey, setIdempotencyKey] = useState<string>('');
+  const [createdOrderId, setCreatedOrderId] = useState<string | null>(null);
+  const [createdOrderNumber, setCreatedOrderNumber] = useState<number | null>(null);
+  const [receiptData, setReceiptData] = useState<{
+    orderId: string;
+    orderNumber?: number;
+    customerName: string;
+    customerPhone: string;
+    address?: string;
+    type: string;
+    branch: string;
+    items: any[];
+    subtotal: number;
+    deliveryFee: number;
+    total: number;
+    createdAt: string;
+  } | null>(null);
+  const [copiedReceiptNum, setCopiedReceiptNum] = useState(false);
 
   const isValidPhone = EGYPTIAN_PHONE_REGEX.test(formData.phone);
   const isPhoneTouchedOrFilled = formData.phone.length > 0;
@@ -77,7 +98,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
     return (p && !p.is_available) || !item.is_available;
   });
   const hasUnavailableItems = unavailableCartItems.length > 0;
-  const isSubmitDisabled = loading || !orderType || !isBranchValid || !isSelectedBranchOpen || hasBranchUnavailableItems || !!isWebsiteClosed || hasUnavailableItems || cart.length === 0 || !isFormValid;
+  const isSubmitDisabled = loading || isSubmitting || !orderType || !isBranchValid || !isSelectedBranchOpen || hasBranchUnavailableItems || !!isWebsiteClosed || hasUnavailableItems || cart.length === 0 || !isFormValid;
 
   // Auto-close if cart becomes empty in real-time (e.g. item removed)
   useEffect(() => {
@@ -97,22 +118,38 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
     }
   }, [isOpen, isAuthenticated, user]);
 
-  // Reset form when modal closes
+  // Reset form and manage idempotency session
   useEffect(() => {
-    if (!isOpen) {
+    if (isOpen) {
+      setIdempotencyKey(`idemp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`);
+    } else {
       setStep(1);
       setFormData({ name: '', phone: '', address: '' });
       setSelectedBranch('');
+      setIdempotencyKey('');
+      setIsSubmitting(false);
+      setCreatedOrderId(null);
+      setCreatedOrderNumber(null);
+      setReceiptData(null);
+      setCopiedReceiptNum(false);
     }
   }, [isOpen]);
 
-  const total = cart.reduce((sum, item) => {
+  const subtotal = cart.reduce((sum, item) => {
     const itemTotal = (item.price + (item.optionsPrice || 0)) * item.quantity;
     return sum + itemTotal;
   }, 0);
 
+  const deliveryFee = orderType === 'delivery'
+    ? (restaurantConfig.ordering.defaultDeliveryFee ?? 25)
+    : 0;
+
+  const total = subtotal + deliveryFee;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting || loading) return;
+
     if (isSubmitDisabled || !isValidPhone || !isBranchValid || !isSelectedBranchOpen || hasBranchUnavailableItems) {
       if (!isBranchValid) {
         toast.error('يرجى اختيار الفرع (فرع الاستاد أو فرع الكرفان)');
@@ -133,34 +170,59 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
       return;
     }
 
-    const orderId = await submitOrder({
-      customer_name: formData.name,
-      customer_phone: formData.phone,
-      address: orderType === 'delivery' ? formData.address : undefined,
-      user_id: isAuthenticated && user ? user.id : undefined,
-      type: orderType || 'pickup',
-      branch: selectedBranch,
-      items: [...cart],
-      total,
-    });
+    setIsSubmitting(true);
+    try {
+      const activeKey = idempotencyKey || `idemp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
-    if (orderId) {
-      setStep(2);
-      clearCart();
-      toast.success('تم استلام طلبك بنجاح!', {
-        description: `رقم الطلب: #${orderId.slice(0, 8).toUpperCase()}`,
+      const cartSnapshot = [...cart];
+      const result = await submitOrder({
+        customer_name: formData.name,
+        customer_phone: formData.phone,
+        address: orderType === 'delivery' ? formData.address : undefined,
+        user_id: isAuthenticated && user ? user.id : undefined,
+        type: orderType || 'pickup',
+        branch: selectedBranch,
+        items: cartSnapshot,
+        total,
+        idempotency_key: activeKey,
       });
-    } else {
-      // Show server-side validation error
-      const errorMessage = useStore.getState().error;
-      toast.error('لم يتم إرسال الطلب', {
-        description: errorMessage || 'يرجى المحاولة مرة أخرى.',
-        duration: 6000,
-      });
-      // If cart became empty because unavailable items were removed, close checkout modal
-      if (useStore.getState().cart.length === 0) {
-        onClose();
+
+      if (result) {
+        setCreatedOrderId(result.orderId);
+        setCreatedOrderNumber(result.orderNumber);
+        setReceiptData({
+          orderId: result.orderId,
+          orderNumber: result.orderNumber,
+          customerName: formData.name,
+          customerPhone: formData.phone,
+          address: orderType === 'delivery' ? formData.address : undefined,
+          type: orderType || 'pickup',
+          branch: selectedBranch,
+          items: cartSnapshot,
+          subtotal,
+          deliveryFee,
+          total,
+          createdAt: new Date().toISOString(),
+        });
+        setStep(2);
+        clearCart();
+        toast.success('تم استلام طلبك بنجاح!', {
+          description: `رقم طلبك: #${result.orderNumber}`,
+        });
+      } else {
+        // Show server-side validation error
+        const errorMessage = useStore.getState().error;
+        toast.error('لم يتم إرسال الطلب', {
+          description: errorMessage || 'يرجى المحاولة مرة أخرى.',
+          duration: 6000,
+        });
+        // If cart became empty because unavailable items were removed, close checkout modal
+        if (useStore.getState().cart.length === 0) {
+          onClose();
+        }
       }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -471,24 +533,200 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
                 </div>
               </div>
             ) : (
-              // Success State
+              // Step 2: Digital Receipt View
               <div
-                className="p-8 sm:p-12 text-center flex flex-col items-center justify-center flex-1 min-h-0 overflow-y-auto"
+                className="p-4 sm:p-6 flex flex-col flex-1 min-h-0 overflow-y-auto"
                 style={{ paddingBottom: 'max(2rem, env(safe-area-inset-bottom, 2rem))' }}
               >
-                <div className="w-20 h-20 sm:w-24 sm:h-24 bg-green-100 rounded-full flex items-center justify-center mb-5 sm:mb-6 shadow-inner ring-8 ring-green-50">
-                  <CheckCircle2 className="w-10 h-10 sm:w-12 sm:h-12 text-green-600" />
+                {/* Printable Digital Receipt Card */}
+                <div id="digital-receipt-printable" className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-3xl p-4 sm:p-6 space-y-4 sm:space-y-5 text-slate-800 shadow-sm print:bg-white print:border-none print:p-0">
+                  
+                  {/* Brand & Receipt Header */}
+                  <div className="flex flex-col items-center text-center pb-3 sm:pb-4 border-b border-slate-200">
+                    <img
+                      src={restaurantConfig.brand.logoUrl}
+                      alt={restaurantConfig.brand.nameAr}
+                      className="w-14 h-14 sm:w-16 sm:h-16 object-contain rounded-2xl mb-2 drop-shadow-sm"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                      }}
+                    />
+                    <h2 className="text-lg sm:text-xl font-black text-slate-900 tracking-tight">
+                      {restaurantConfig.brand.nameAr}
+                    </h2>
+                    <p className="text-[11px] sm:text-xs text-slate-500 font-medium">
+                      {restaurantConfig.brand.taglineAr} — إيصال طلب إلكتروني
+                    </p>
+                  </div>
+
+                  {/* Prominent Order Number Card */}
+                  <div className="bg-white border-2 border-primary/20 rounded-2xl p-3.5 sm:p-4 text-center shadow-xs">
+                    <span className="text-xs font-bold text-slate-400 block mb-1">
+                      رقم طلبك
+                    </span>
+                    <div className="flex items-center justify-center gap-2 sm:gap-3">
+                      <span className="text-2xl sm:text-4xl font-mono font-black text-primary tracking-wider">
+                        #{receiptData?.orderNumber || (receiptData?.orderId ? receiptData.orderId.slice(0, 8).toUpperCase() : '1001')}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const num = receiptData?.orderNumber ? String(receiptData.orderNumber) : (receiptData?.orderId || '');
+                          navigator.clipboard?.writeText(num);
+                          setCopiedReceiptNum(true);
+                          toast.success('تم نسخ رقم الطلب');
+                          setTimeout(() => setCopiedReceiptNum(false), 2000);
+                        }}
+                        className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors flex items-center justify-center print:hidden cursor-pointer"
+                        title="نسخ رقم الطلب"
+                      >
+                        {copiedReceiptNum ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+                      </button>
+                    </div>
+                    <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>تم استلام وتأكيد الطلب بنجاح</span>
+                    </div>
+                  </div>
+
+                  {/* Order & Customer Metadata */}
+                  <div className="grid grid-cols-2 gap-2.5 text-xs bg-white p-3 sm:p-3.5 rounded-2xl border border-slate-100">
+                    <div>
+                      <span className="text-slate-400 font-bold block">تاريخ وتوقيت الطلب</span>
+                      <span className="font-semibold text-slate-700">
+                        {receiptData?.createdAt
+                          ? new Date(receiptData.createdAt).toLocaleDateString('ar-EG', {
+                              day: 'numeric',
+                              month: 'short',
+                            }) + ' ' + new Date(receiptData.createdAt).toLocaleTimeString('ar-EG', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })
+                          : 'الآن'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 font-bold block">نوع الاستلام</span>
+                      <span className="font-semibold text-slate-700">
+                        {receiptData?.type === 'delivery' ? 'توصيل للمنزل' : 'استلام من المطعم'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 font-bold block">العميل</span>
+                      <span className="font-semibold text-slate-700">
+                        {receiptData?.customerName}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 font-bold block">الهاتف</span>
+                      <span className="font-semibold text-slate-700 font-mono">
+                        {receiptData?.customerPhone}
+                      </span>
+                    </div>
+                    <div className="col-span-2 pt-1 border-t border-slate-100 flex items-center justify-between">
+                      <span className="text-slate-400 font-bold">الفرع:</span>
+                      <span className="font-semibold text-slate-700">{receiptData?.branch || 'فرع الاستاد'}</span>
+                    </div>
+                    {receiptData?.type === 'delivery' && receiptData?.address && (
+                      <div className="col-span-2 pt-1 border-t border-slate-100">
+                        <span className="text-slate-400 font-bold block">عنوان التوصيل:</span>
+                        <span className="font-semibold text-slate-700">{receiptData.address}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Items List */}
+                  <div className="space-y-1.5">
+                    <span className="text-xs font-bold text-slate-500 block">الأصناف المطلوبة</span>
+                    <div className="divide-y divide-slate-100 bg-white rounded-2xl border border-slate-100 overflow-hidden">
+                      {receiptData?.items?.map((item: any, idx: number) => {
+                        const itemPrice = (item.price ?? item.unit_price ?? 0) + (item.optionsPrice ?? 0);
+                        const itemTotal = itemPrice * item.quantity;
+                        return (
+                          <div key={item.id || idx} className="p-2.5 sm:p-3 flex items-start justify-between gap-3 text-xs">
+                            <div className="flex-1">
+                              <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                                <span className="w-5 h-5 rounded-md bg-red-50 text-primary flex items-center justify-center font-mono font-black text-[11px]">
+                                  {item.quantity}×
+                                </span>
+                                <span>{item.name_ar}</span>
+                              </div>
+                              {item.specialInstructions && (
+                                <p className="text-[11px] text-slate-400 italic mr-6 mt-0.5">
+                                  — {item.specialInstructions}
+                                </p>
+                              )}
+                            </div>
+                            <span className="font-bold text-slate-900 font-mono shrink-0">
+                              {itemTotal} ج.م
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Financial Breakdown */}
+                  <div className="bg-white p-3 sm:p-3.5 rounded-2xl border border-slate-100 space-y-2 text-xs">
+                    <div className="flex justify-between text-slate-500 font-medium">
+                      <span>المجموع الفرعي</span>
+                      <span className="font-mono">{receiptData?.subtotal || 0} ج.م</span>
+                    </div>
+                    {typeof receiptData?.deliveryFee === 'number' && receiptData.deliveryFee > 0 && (
+                      <div className="flex justify-between text-slate-500 font-medium">
+                        <span>رسوم التوصيل</span>
+                        <span className="font-mono">{receiptData.deliveryFee} ج.م</span>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-sm font-black">
+                      <span className="text-slate-900">المبلغ الإجمالي</span>
+                      <span className="text-primary font-mono text-base sm:text-lg">
+                        {receiptData?.total || 0} ج.م
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 text-center font-medium pt-0.5">
+                      طريقة الدفع: نقداً عند الاستلام (كاش)
+                    </p>
+                  </div>
                 </div>
-                <h2 className="text-2xl sm:text-3xl font-black text-slate-900 mb-2">تم بنجاح!</h2>
-                <p className="text-slate-500 mb-6 sm:mb-8 max-w-[280px] leading-relaxed text-sm sm:text-base">
-                  شكراً لطلبك. سنتواصل معك لتأكيد الطلب قريباً.
-                </p>
-                <button
-                  onClick={onClose}
-                  className="w-full bg-slate-900 text-white py-3.5 sm:py-4 rounded-xl font-bold hover:bg-slate-800 transition-all shadow-lg active:scale-95 cursor-pointer text-sm sm:text-base"
-                >
-                  العودة للقائمة
-                </button>
+
+                {/* Receipt Actions (Hidden in Print) */}
+                <div className="mt-4 sm:mt-5 space-y-2 print:hidden">
+                  {onOpenTracking && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const trackId = receiptData?.orderNumber ? String(receiptData.orderNumber) : (receiptData?.orderId || '');
+                        const phone = receiptData?.customerPhone || formData.phone;
+                        onClose();
+                        onOpenTracking(trackId, phone);
+                      }}
+                      className="w-full bg-primary hover:bg-red-700 text-white py-3 sm:py-3.5 rounded-xl font-bold transition-all shadow-lg shadow-red-500/20 active:scale-98 cursor-pointer text-sm sm:text-base flex items-center justify-center gap-2"
+                    >
+                      <Truck className="w-5 h-5" />
+                      <span>تتبّع حالة الطلب</span>
+                    </button>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => window.print()}
+                      className="w-full bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 py-2.5 sm:py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer text-xs sm:text-sm shadow-xs"
+                    >
+                      <Printer className="w-4 h-4 text-slate-500" />
+                      <span>طباعة الإيصال</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={onClose}
+                      className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 py-2.5 sm:py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer text-xs sm:text-sm"
+                    >
+                      <span>العودة للقائمة</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </motion.div>

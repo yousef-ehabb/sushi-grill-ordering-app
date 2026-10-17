@@ -39,7 +39,7 @@ if (isFirebaseConfigured()) {
   try {
     app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
     
-    // Enable multi-tab offline persistence and auto-detect long polling to prevent QUIC/WebChannel stream errors
+    // Enable multi-tab offline persistence with auto-detect long polling and undefined property safety
     try {
       db = initializeFirestore(app, {
         experimentalAutoDetectLongPolling: true,
@@ -49,7 +49,7 @@ if (isFirebaseConfigured()) {
         }),
       });
     } catch {
-      // Fallback if Firestore was already initialized
+      // Fallback if Firestore was already initialized (e.g. fast refresh/HMR)
       db = getFirestore(app);
     }
 

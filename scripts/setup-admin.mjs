@@ -1,5 +1,12 @@
-const BASE_URL = 'https://m3ecd7r6.eu-central.insforge.app';
-const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3OC0xMjM0LTU2NzgtOTBhYi1jZGVmMTIzNDU2NzgiLCJlbWFpbCI6ImFub25AaW5zZm9yZ2UuY29tIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA5NDAwMDZ9.EamPCz5DU16vxYY59G4VbKeShIaDgjP5ZeXaDww6z24';
+const BASE_URL = process.env.INSFORGE_BASE_URL;
+const ANON_KEY = process.env.INSFORGE_ANON_KEY;
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+
+if (!BASE_URL || !ANON_KEY || !ADMIN_EMAIL || !ADMIN_PASSWORD) {
+    console.error('Missing required environment variables: INSFORGE_BASE_URL, INSFORGE_ANON_KEY, ADMIN_EMAIL, ADMIN_PASSWORD');
+    process.exit(1);
+}
 
 async function main() {
     // 1. Register admin user
@@ -8,14 +15,14 @@ async function main() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-            email: 'admin@sushigrill.app',
-            password: 'admin123',
+            email: ADMIN_EMAIL,
+            password: ADMIN_PASSWORD,
             name: 'Admin'
         })
     });
 
     const signupData = await signupRes.json();
-    console.log('Signup:', JSON.stringify(signupData, null, 2));
+    console.log('Signup status:', signupRes.status);
 
     let userId = signupData.user?.id;
 
@@ -26,12 +33,11 @@ async function main() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                email: 'admin@sushigrill.app',
-                password: 'admin123'
+                email: ADMIN_EMAIL,
+                password: ADMIN_PASSWORD
             })
         });
         const loginData = await loginRes.json();
-        console.log('Login:', JSON.stringify(loginData, null, 2));
         userId = loginData.user?.id;
     }
 
@@ -54,7 +60,7 @@ async function main() {
         body: JSON.stringify({
             user_id: userId,
             username: 'admin',
-            email: 'admin@sushigrill.app'
+            email: ADMIN_EMAIL
         })
     });
 
