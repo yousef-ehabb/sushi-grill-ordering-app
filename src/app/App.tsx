@@ -12,6 +12,7 @@ import { AccountPage } from './components/auth/AccountPage';
 import { OrderDetailPage } from './components/auth/OrderDetailPage';
 import { AuthGuard } from './components/auth/AuthGuard';
 import { ActiveOrderModal } from './components/ActiveOrderModal';
+import { OrderConfirmationModal, OrderReceiptData } from './components/OrderConfirmationModal';
 import { Footer } from './components/Footer';
 import { useStore } from './store/useStore';
 import { useAuthStore } from './store/useAuthStore';
@@ -27,6 +28,7 @@ const CustomerLayout: React.FC = () => {
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [isActiveOrderOpen, setIsActiveOrderOpen] = useState(false);
   const [guestTrackingParams, setGuestTrackingParams] = useState<{ orderId: string; phone: string } | null>(null);
+  const [confirmationReceipt, setConfirmationReceipt] = useState<OrderReceiptData | null>(null);
   const {
     cart,
     globalSettings,
@@ -78,8 +80,18 @@ const CustomerLayout: React.FC = () => {
         fetchOrders();
       } else if (event.type === 'ORDER_STATUS_CHANGED') {
         const currentOrders = useStore.getState().orders;
+        const currentActive = useStore.getState().activeOrder;
+        const isMatch = (o: any) =>
+          o.id === event.orderId ||
+          (o.order_number && String(o.order_number) === event.orderId) ||
+          (o.order_number && `#${o.order_number}` === event.orderId);
+
         useStore.setState({
-          orders: currentOrders.map((o) => (o.id === event.orderId ? { ...o, status: event.status } : o)),
+          orders: currentOrders.map((o) => (isMatch(o) ? { ...o, status: event.status } : o)),
+          activeOrder:
+            currentActive && (currentActive.id === event.orderId || isMatch(currentActive))
+              ? { ...currentActive, status: event.status }
+              : currentActive,
         });
         fetchOrders();
       } else if (event.type === 'ORDER_EVENT_NOTIFICATION') {
@@ -396,6 +408,20 @@ const CustomerLayout: React.FC = () => {
         isOpen={isCheckoutOpen}
         onClose={() => setIsCheckoutOpen(false)}
         onOpenTracking={(orderId, phone) => {
+          setGuestTrackingParams({ orderId, phone });
+          setIsActiveOrderOpen(true);
+        }}
+        onOrderSuccess={(receipt) => {
+          setIsCheckoutOpen(false);
+          setConfirmationReceipt(receipt);
+        }}
+      />
+      <OrderConfirmationModal
+        isOpen={!!confirmationReceipt}
+        receiptData={confirmationReceipt}
+        onClose={() => setConfirmationReceipt(null)}
+        onOpenTracking={(orderId, phone) => {
+          setConfirmationReceipt(null);
           setGuestTrackingParams({ orderId, phone });
           setIsActiveOrderOpen(true);
         }}

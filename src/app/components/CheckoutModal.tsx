@@ -7,10 +7,12 @@ import { toast } from 'sonner';
 import { clsx } from 'clsx';
 import { isProductAvailableInBranch, isBranchOpen, getBranchClosedMessage } from '../utils/branchAvailability';
 import { restaurantConfig } from '../../config/restaurant';
+import type { OrderReceiptData } from './OrderConfirmationModal';
 
 interface CheckoutModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onOrderSuccess?: (receipt: OrderReceiptData) => void;
   onOpenTracking?: (orderId: string, phone: string) => void;
 }
 
@@ -33,7 +35,7 @@ const sanitizeEgyptianPhone = (value: string): string => {
   return cleaned.slice(0, 11);
 };
 
-export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, onOpenTracking }) => {
+export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, onOrderSuccess, onOpenTracking }) => {
   const { cart, products, globalSettings, orderType, setOrderType, clearCart, submitOrder, loading } = useStore();
   const { user, isAuthenticated } = useAuthStore();
   const [step, setStep] = useState(1);
@@ -47,20 +49,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
   const [idempotencyKey, setIdempotencyKey] = useState<string>('');
   const [createdOrderId, setCreatedOrderId] = useState<string | null>(null);
   const [createdOrderNumber, setCreatedOrderNumber] = useState<number | null>(null);
-  const [receiptData, setReceiptData] = useState<{
-    orderId: string;
-    orderNumber?: number;
-    customerName: string;
-    customerPhone: string;
-    address?: string;
-    type: string;
-    branch: string;
-    items: any[];
-    subtotal: number;
-    deliveryFee: number;
-    total: number;
-    createdAt: string;
-  } | null>(null);
+  const [receiptData, setReceiptData] = useState<OrderReceiptData | null>(null);
   const [copiedReceiptNum, setCopiedReceiptNum] = useState(false);
 
   const isValidPhone = EGYPTIAN_PHONE_REGEX.test(formData.phone);
@@ -188,9 +177,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
       });
 
       if (result) {
-        setCreatedOrderId(result.orderId);
-        setCreatedOrderNumber(result.orderNumber);
-        setReceiptData({
+        const receipt: OrderReceiptData = {
           orderId: result.orderId,
           orderNumber: result.orderNumber,
           customerName: formData.name,
@@ -203,12 +190,35 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
           deliveryFee,
           total,
           createdAt: new Date().toISOString(),
-        });
-        setStep(2);
+        };
+
+        // Persist last order details for convenience and instant tracking
+        try {
+          localStorage.setItem('pochinki_last_order', JSON.stringify({
+            orderId: result.orderId,
+            orderNumber: result.orderNumber,
+            phone: formData.phone,
+            name: formData.name,
+            timestamp: Date.now(),
+          }));
+        } catch (e) {
+          console.warn('Failed to save last order in localStorage:', e);
+        }
+
         clearCart();
-        toast.success('تم استلام طلبك بنجاح!', {
-          description: `رقم طلبك: #${result.orderNumber}`,
-        });
+
+        if (onOrderSuccess) {
+          onClose();
+          onOrderSuccess(receipt);
+        } else {
+          setCreatedOrderId(result.orderId);
+          setCreatedOrderNumber(result.orderNumber);
+          setReceiptData(receipt);
+          setStep(2);
+          toast.success('تم استلام طلبك بنجاح!', {
+            description: `رقم طلبك: #${result.orderNumber}`,
+          });
+        }
       } else {
         // Show server-side validation error
         const errorMessage = useStore.getState().error;

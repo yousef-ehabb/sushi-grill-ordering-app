@@ -1,15 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { X, Clock, Truck, Store, ChefHat, Package, CircleDot, Loader2, UtensilsCrossed, Search, AlertCircle, RefreshCw, Copy, Check, XCircle, Ban } from 'lucide-react';
+import { X, Clock, Truck, Store, ChefHat, Package, CircleDot, Loader2, UtensilsCrossed, Search, AlertCircle, RefreshCw, Copy, Check, XCircle, Ban, CheckCircle, ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
 import { doc, getDoc } from 'firebase/firestore';
 import { db, isFirebaseConfigured } from '../../lib/firebase';
 import { useAuthStore } from '../store/useAuthStore';
-import { ordersService } from '../../services/firestore';
+import { ordersService, getStoredOrders } from '../../services/firestore';
 import type { OrderItem, OrderStatus } from '../store/useStore';
 import { resolveAllOptionNames } from '../utils/optionNames';
 import { getDisplayOrderId, isCancellable } from '../utils/orderUtils';
-import { broadcastSyncEvent } from '../utils/realtimeSync';
+import { broadcastSyncEvent, subscribeToSyncEvents } from '../utils/realtimeSync';
 
 interface ActiveOrderData {
     id: string;
@@ -36,12 +36,14 @@ const deliverySteps: StatusStep[] = [
     { key: 'new', label: 'جديد', icon: CircleDot, color: 'text-blue-600', bgColor: 'bg-blue-500' },
     { key: 'preparing', label: 'قيد التحضير', icon: ChefHat, color: 'text-amber-600', bgColor: 'bg-amber-500' },
     { key: 'out_for_delivery', label: 'في التوصيل', icon: Truck, color: 'text-teal-600', bgColor: 'bg-teal-500' },
+    { key: 'completed', label: 'تم التسليم', icon: CheckCircle, color: 'text-emerald-600', bgColor: 'bg-emerald-500' },
 ];
 
 const pickupSteps: StatusStep[] = [
     { key: 'new', label: 'جديد', icon: CircleDot, color: 'text-blue-600', bgColor: 'bg-blue-500' },
     { key: 'preparing', label: 'قيد التحضير', icon: ChefHat, color: 'text-amber-600', bgColor: 'bg-amber-500' },
-    { key: 'ready', label: 'جاهز للاستلام', icon: Package, color: 'text-emerald-600', bgColor: 'bg-emerald-500' },
+    { key: 'ready', label: 'جاهز للاستلام', icon: Package, color: 'text-teal-600', bgColor: 'bg-teal-500' },
+    { key: 'completed', label: 'تم التسليم', icon: CheckCircle, color: 'text-emerald-600', bgColor: 'bg-emerald-500' },
 ];
 
 function getSteps(type: string): StatusStep[] {
@@ -52,10 +54,21 @@ function resolveStepIndex(steps: StatusStep[], status: string, type: string): nu
     const idx = steps.findIndex(s => s.key === status);
     if (idx !== -1) return idx;
 
-    if (type === 'delivery' && status === 'ready') return 1;
+    if (status === 'completed') return 3;
+    if (type === 'delivery' && status === 'ready') return 2;
     if (type === 'pickup' && status === 'out_for_delivery') return 2;
+    if (status === 'preparing') return 1;
+    if (status === 'new') return 0;
 
     return -1;
+}
+
+interface LastSavedOrder {
+    orderId: string;
+    orderNumber?: number;
+    phone: string;
+    name?: string;
+    timestamp?: number;
 }
 
 interface Props {
@@ -79,6 +92,7 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
     const [manualPhone, setManualPhone] = useState('');
     const [isSearchingGuest, setIsSearchingGuest] = useState(false);
     const [isCancelling, setIsCancelling] = useState(false);
+    const [lastSavedOrder, setLastSavedOrder] = useState<LastSavedOrder | null>(null);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -86,6 +100,25 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
         setFetchError(null);
         if (orderId) setManualOrderId(orderId);
         if (guestPhone) setManualPhone(guestPhone);
+
+        // Check for last saved order in localStorage for guest convenience
+        try {
+            const saved = localStorage.getItem('pochinki_last_order');
+            if (saved) {
+                const parsed: LastSavedOrder = JSON.parse(saved);
+                if (parsed && (parsed.orderId || parsed.orderNumber) && parsed.phone) {
+                    setLastSavedOrder(parsed);
+                    if (!orderId) {
+                        setManualOrderId((prev) => prev || (parsed.orderNumber ? String(parsed.orderNumber) : parsed.orderId));
+                    }
+                    if (!guestPhone) {
+                        setManualPhone((prev) => prev || parsed.phone);
+                    }
+                }
+            }
+        } catch {
+            // Ignore localStorage parse errors
+        }
 
         // Scenario 1: Authenticated user tracking an active order
         if (user && orderId) {
@@ -101,6 +134,132 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
             setLoading(false);
         }
     }, [isOpen, orderId, guestPhone, user]);
+
+    // ── Live Real-Time Subscriptions (Firestore onSnapshot + BroadcastChannel + Storage + 3s Polling) ──
+    useEffect(() => {
+        if (!isOpen) return;
+
+        const targetId = order?.id || orderId;
+        if (!targetId) return;
+
+        // 1. Firebase Firestore live onSnapshot subscription
+        const unsubscribeFirestore = ordersService.subscribeToOrder(targetId, (freshOrder) => {
+            if (freshOrder) {
+                setOrder((prev) => {
+                    if (!prev) {
+                        return {
+                            id: freshOrder.id,
+                            order_number: freshOrder.order_number || null,
+                            status: freshOrder.status,
+                            type: freshOrder.type,
+                            branch: freshOrder.branch,
+                            subtotal: freshOrder.subtotal,
+                            delivery_fee: freshOrder.delivery_fee,
+                            total: freshOrder.total,
+                            created_at: freshOrder.created_at,
+                            items: freshOrder.items || [],
+                        };
+                    }
+                    if (prev.status === freshOrder.status && prev.total === freshOrder.total) {
+                        return prev;
+                    }
+                    return {
+                        ...prev,
+                        status: freshOrder.status,
+                        total: freshOrder.total ?? prev.total,
+                        subtotal: freshOrder.subtotal ?? prev.subtotal,
+                        delivery_fee: freshOrder.delivery_fee ?? prev.delivery_fee,
+                        items: freshOrder.items ?? prev.items,
+                    };
+                });
+            }
+        });
+
+        // 2. BroadcastChannel & LocalStorage sync events (0ms cross-tab instant update)
+        const unsubscribeSync = subscribeToSyncEvents((event) => {
+            if (event.type === 'ORDER_STATUS_CHANGED') {
+                setOrder((prev) => {
+                    if (!prev) return null;
+                    const matches =
+                        event.orderId === prev.id ||
+                        (prev.order_number && String(event.orderId) === String(prev.order_number)) ||
+                        (prev.order_number && event.orderId === `#${prev.order_number}`) ||
+                        getDisplayOrderId(prev as any) === event.orderId;
+
+                    if (matches && prev.status !== event.status) {
+                        return { ...prev, status: event.status };
+                    }
+                    return prev;
+                });
+            } else if (event.type === 'ORDER_EVENT_NOTIFICATION') {
+                if (order?.id && (event.orderId === order.id || String(event.orderId) === String(order.order_number))) {
+                    ordersService.getOrderById(order.id).then((fresh) => {
+                        if (fresh) setOrder((prev) => (prev ? { ...prev, ...fresh } : null));
+                    });
+                }
+            }
+        });
+
+        // 3. Storage event listener on LocalStorage cache
+        const handleStorage = (e: StorageEvent) => {
+            if (e.key === 'pochinki_orders_cache' && e.newValue) {
+                try {
+                    const cachedList = JSON.parse(e.newValue);
+                    if (Array.isArray(cachedList)) {
+                        setOrder((prev) => {
+                            if (!prev) return null;
+                            const found = cachedList.find(
+                                (o: any) =>
+                                    o.id === prev.id ||
+                                    (prev.order_number && o.order_number === prev.order_number) ||
+                                    (prev.order_number && `#${o.order_number}` === `#${prev.order_number}`)
+                            );
+                            if (found && found.status && found.status !== prev.status) {
+                                return { ...prev, status: found.status };
+                            }
+                            return prev;
+                        });
+                    }
+                } catch {
+                    // Ignore JSON parse errors
+                }
+            }
+        };
+        window.addEventListener('storage', handleStorage);
+
+        // 4. Lightweight 3-second polling fallback
+        const pollTimer = setInterval(async () => {
+            try {
+                // Check cached orders first
+                const cached = getStoredOrders().find(
+                    (o) =>
+                        (order?.id && o.id === order.id) ||
+                        (order?.order_number && o.order_number === order.order_number)
+                );
+                if (cached && order && cached.status !== order.status) {
+                    setOrder((prev) => (prev ? { ...prev, status: cached.status } : null));
+                }
+
+                // Check Firestore
+                const currentId = order?.id || orderId;
+                if (currentId) {
+                    const fresh = await ordersService.getOrderById(currentId);
+                    if (fresh && order && fresh.status !== order.status) {
+                        setOrder((prev) => (prev ? { ...prev, status: fresh.status } : null));
+                    }
+                }
+            } catch {
+                // Background polling error ignored
+            }
+        }, 3000);
+
+        return () => {
+            unsubscribeFirestore();
+            unsubscribeSync();
+            window.removeEventListener('storage', handleStorage);
+            clearInterval(pollTimer);
+        };
+    }, [isOpen, order?.id, order?.order_number, order?.status, orderId]);
 
     const fetchAuthenticatedOrder = async (id: string) => {
         if (!id || !user || !isFirebaseConfigured() || !db) {
@@ -324,41 +483,78 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
                                         </div>
                                     )}
 
-                                    {/* Status Timeline (only when not cancelled/completed) */}
-                                    {order.status !== 'cancelled' && order.status !== 'completed' && (
-                                    <div className="flex items-center justify-between">
-                                        {steps.map((step, i) => {
-                                            const Icon = step.icon;
-                                            const isActive = i <= activeStepIndex;
-                                            const isCurrent = i === activeStepIndex;
-                                            return (
-                                                <div key={step.key} className="flex flex-col items-center gap-1.5 flex-1">
+                                    {/* Status Timeline (visible for all non-cancelled orders) */}
+                                    {order.status !== 'cancelled' && (
+                                        <div className="space-y-4">
+                                            <div className="relative py-2">
+                                                {/* Connecting track line */}
+                                                <div className="absolute top-5 right-6 left-6 h-1 bg-slate-100 -z-0">
                                                     <div
-                                                        className={`w-9 h-9 rounded-full flex items-center justify-center transition-all ${isCurrent
-                                                            ? `${step.bgColor} text-white shadow-lg`
-                                                            : isActive
-                                                                ? 'bg-slate-200 text-slate-600'
-                                                                : 'bg-slate-100 text-slate-300'
-                                                            }`}
-                                                    >
-                                                        <Icon className="w-4 h-4" />
-                                                    </div>
-                                                    <span className={`text-[10px] font-bold text-center leading-tight ${isCurrent ? 'text-slate-900 font-black' : isActive ? 'text-slate-500' : 'text-slate-300'}`}>
-                                                        {step.label}
-                                                    </span>
+                                                        className="h-full bg-emerald-500 transition-all duration-500 rounded-full"
+                                                        style={{
+                                                            width: `${Math.max(0, Math.min(100, (activeStepIndex / (steps.length - 1)) * 100))}%`
+                                                        }}
+                                                    />
                                                 </div>
-                                            );
-                                        })}
-                                    </div>
-                                    )}
 
-                                    {/* Completed State */}
-                                    {order.status === 'completed' && (
-                                        <div className="bg-green-50 border border-green-200 rounded-2xl p-5 text-center space-y-2">
-                                            <div className="w-12 h-12 rounded-full bg-green-100 text-green-600 mx-auto flex items-center justify-center">
-                                                <Check className="w-6 h-6" />
+                                                {/* 4 Steps Icons (RTL) */}
+                                                <div className="relative z-10 flex items-start justify-between">
+                                                    {steps.map((step, i) => {
+                                                        const Icon = step.icon;
+                                                        const isActive = i <= activeStepIndex;
+                                                        const isCurrent = i === activeStepIndex;
+                                                        const isCompletedStep = step.key === 'completed' && isCurrent;
+
+                                                        return (
+                                                            <div key={step.key} className="flex flex-col items-center gap-1.5 flex-1">
+                                                                <div
+                                                                    className={`w-9 h-9 rounded-full flex items-center justify-center transition-all ${
+                                                                        isCompletedStep
+                                                                            ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-200 ring-4 ring-emerald-100'
+                                                                            : isCurrent
+                                                                                ? `${step.bgColor} text-white shadow-lg ring-4 ring-slate-100`
+                                                                                : isActive
+                                                                                    ? 'bg-slate-700 text-white'
+                                                                                    : 'bg-slate-100 text-slate-300'
+                                                                    }`}
+                                                                >
+                                                                    <Icon className="w-4 h-4" />
+                                                                </div>
+                                                                <span
+                                                                    className={`text-[10px] font-bold text-center leading-tight ${
+                                                                        isCurrent
+                                                                            ? isCompletedStep ? 'text-emerald-700 font-black' : 'text-slate-900 font-black'
+                                                                            : isActive
+                                                                                ? 'text-slate-600 font-semibold'
+                                                                                : 'text-slate-300'
+                                                                    }`}
+                                                                >
+                                                                    {step.label}
+                                                                </span>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
                                             </div>
-                                            <h3 className="text-base font-black text-green-700">تم تسليم الطلب بنجاح</h3>
+
+                                            {/* Completed Message Banner */}
+                                            {order.status === 'completed' && (
+                                                <motion.div
+                                                    initial={{ opacity: 0, y: 8 }}
+                                                    animate={{ opacity: 1, y: 0 }}
+                                                    className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 text-center space-y-1.5 shadow-sm"
+                                                >
+                                                    <div className="w-10 h-10 rounded-full bg-emerald-500 text-white mx-auto flex items-center justify-center shadow-md shadow-emerald-200">
+                                                        <CheckCircle className="w-5 h-5" />
+                                                    </div>
+                                                    <h3 className="text-sm font-black text-emerald-800">
+                                                        تم تسليم طلبك بنجاح! بالهنا والشفا من بوشنكي برجر ❤️
+                                                    </h3>
+                                                    <p className="text-[11px] text-emerald-600 font-medium">
+                                                        نسعد دائماً بخدمتكم وتجهيز أشهى الوجبات لكم
+                                                    </p>
+                                                </motion.div>
+                                            )}
                                         </div>
                                     )}
 
@@ -480,6 +676,39 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
                                         <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-xs font-bold flex items-center gap-2">
                                             <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
                                             <span>{fetchError}</span>
+                                        </div>
+                                    )}
+
+                                    {/* Quick Chip for Last Saved Order on this Device */}
+                                    {lastSavedOrder && (
+                                        <div className="bg-gradient-to-r from-red-50 to-amber-50/70 border border-red-200/90 rounded-2xl p-3.5 space-y-2.5 text-right shadow-xs">
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1.5">
+                                                    <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                                                    آخر طلب مسجل على هذا الجهاز
+                                                </span>
+                                                <span className="text-xs font-mono font-black text-primary bg-white px-2.5 py-0.5 rounded-lg border border-red-200 shadow-2xs">
+                                                    {lastSavedOrder.orderNumber ? `#${lastSavedOrder.orderNumber}` : `#${lastSavedOrder.orderId.slice(0, 8)}`}
+                                                </span>
+                                            </div>
+                                            <div className="flex items-center justify-between gap-2 pt-1 border-t border-red-100/60">
+                                                <span className="text-xs text-slate-600 font-medium">
+                                                    هاتف: <span className="font-mono font-bold" dir="ltr">{lastSavedOrder.phone}</span>
+                                                </span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        const id = lastSavedOrder.orderNumber ? String(lastSavedOrder.orderNumber) : lastSavedOrder.orderId;
+                                                        setManualOrderId(id);
+                                                        setManualPhone(lastSavedOrder.phone);
+                                                        fetchGuestOrder(id, lastSavedOrder.phone);
+                                                    }}
+                                                    className="px-3 py-1.5 bg-primary hover:bg-red-700 text-white text-xs font-bold rounded-xl transition-all shadow-xs flex items-center gap-1.5 cursor-pointer active:scale-95"
+                                                >
+                                                    <span>متابعة هذا الطلب</span>
+                                                    <ArrowLeft className="w-3.5 h-3.5" />
+                                                </button>
+                                            </div>
                                         </div>
                                     )}
 
