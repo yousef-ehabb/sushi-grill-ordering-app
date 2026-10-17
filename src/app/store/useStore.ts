@@ -579,6 +579,13 @@ export const useStore = create<AppState>()(
           });
 
           set({ loading: false });
+          if (result?.orderId) {
+            broadcastSyncEvent({
+              type: 'ORDER_EVENT_NOTIFICATION',
+              orderId: result.orderId,
+              action: 'created',
+            });
+          }
           return result;
         } catch (err: any) {
           set({ loading: false, error: err.message || 'فشل إنشاء الطلب' });
@@ -678,6 +685,11 @@ export const useStore = create<AppState>()(
 
         try {
           await ordersService.updateOrderStatus(orderId, status);
+          broadcastSyncEvent({
+            type: 'ORDER_EVENT_NOTIFICATION',
+            orderId,
+            action: 'status_changed',
+          });
         } catch (error) {
           console.error('Failed to update order status:', error);
           get().fetchOrders();

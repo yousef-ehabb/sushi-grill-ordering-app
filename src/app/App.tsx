@@ -37,7 +37,8 @@ const CustomerLayout: React.FC = () => {
     updateProductAvailabilityLocal,
     updateGlobalSettingsLocal,
     activeOrder,
-    fetchActiveOrder
+    fetchActiveOrder,
+    fetchOrders,
   } = useStore();
   const { isAuthenticated, user, initSession } = useAuthStore();
   const isOpen = globalSettings?.is_website_open ?? true;
@@ -68,6 +69,9 @@ const CustomerLayout: React.FC = () => {
         setProducts(currentProducts.map(p => p.id === event.productId ? { ...p, ...event.data } : p));
       } else if (event.type === 'GLOBAL_SETTINGS_CHANGED') {
         updateGlobalSettingsLocal(event.settings);
+      } else if (event.type === 'ORDER_EVENT_NOTIFICATION') {
+        // Notification-only: trigger authorized re-fetch from Firestore source-of-truth without bypassing security
+        fetchOrders();
       } else if (event.type === 'FORCE_REFRESH') {
         fetchProducts();
         fetchGlobalSettings();

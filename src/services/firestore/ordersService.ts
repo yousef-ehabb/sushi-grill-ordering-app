@@ -239,28 +239,17 @@ export const ordersService = {
     }
 
     try {
-      const q = query(
-        collection(db, ORDERS_COLLECTION),
-        orderBy('created_at', 'desc')
-      );
-      const snapshot = await getDocs(q);
-      return snapshot.docs.map((docSnap) => ({
+      // Query simple collection without compound orderBy to prevent 400 Bad Request & missing index errors
+      const snapshot = await getDocs(collection(db, ORDERS_COLLECTION));
+      const orders = snapshot.docs.map((docSnap) => ({
         id: docSnap.id,
         ...(docSnap.data() as Omit<Order, 'id'>),
       }));
+      orders.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+      return orders;
     } catch (error) {
-      console.error('[Firestore] Error fetching orders with orderBy, trying fallback:', error);
-      try {
-        const snapshot = await getDocs(collection(db, ORDERS_COLLECTION));
-        const orders = snapshot.docs.map((docSnap) => ({
-          id: docSnap.id,
-          ...(docSnap.data() as Omit<Order, 'id'>),
-        }));
-        return orders.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      } catch (fallbackError) {
-        console.error('[Firestore] Error fetching all orders fallback:', fallbackError);
-        return [];
-      }
+      console.error('[Firestore] Error fetching all orders:', error);
+      return [];
     }
   },
 
@@ -391,22 +380,17 @@ export const ordersService = {
 
   /**
    * Subscribe in real-time to all orders for the Admin Screen (with optional branch scoping)
+   * Programmatically sorts in memory to avoid 400 Bad Request / missing compound index errors
    */
   subscribeToAllOrders(callback: (orders: Order[]) => void, branchScope?: string | null): Unsubscribe {
     if (!isFirebaseConfigured() || !db) {
       return () => {};
     }
 
+    const colRef = collection(db, ORDERS_COLLECTION);
     const q = branchScope && branchScope !== 'all'
-      ? query(
-          collection(db, ORDERS_COLLECTION),
-          where('branch', '==', branchScope),
-          orderBy('created_at', 'desc')
-        )
-      : query(
-          collection(db, ORDERS_COLLECTION),
-          orderBy('created_at', 'desc')
-        );
+      ? query(colRef, where('branch', '==', branchScope))
+      : colRef;
 
     return onSnapshot(
       q,
@@ -415,6 +399,8 @@ export const ordersService = {
           id: docSnap.id,
           ...(docSnap.data() as Omit<Order, 'id'>),
         }));
+        // Sort programmatically on client side (createdAt descending) to avoid index/stream errors
+        orders.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
         callback(orders);
       },
       (error) => {

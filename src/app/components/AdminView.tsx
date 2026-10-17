@@ -153,11 +153,16 @@ export const AdminView: React.FC = () => {
   useEffect(() => {
     const loadData = async () => {
       setIsLoading(true);
-      await Promise.all([
-        fetchOrders(), fetchProducts(), fetchCategories(),
-        fetchGlobalSettings(), fetchBusinessRules()
-      ]);
-      setIsLoading(false);
+      try {
+        await Promise.all([
+          fetchOrders(), fetchProducts(), fetchCategories(),
+          fetchGlobalSettings(), fetchBusinessRules()
+        ]);
+      } catch (err) {
+        console.warn('[AdminView] Error loading fresh data:', err);
+      } finally {
+        setIsLoading(false);
+      }
     };
     loadData();
 
@@ -447,11 +452,18 @@ export const AdminView: React.FC = () => {
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    await Promise.all([
-      fetchOrders(), fetchProducts(), fetchCategories(),
-      fetchGlobalSettings(), fetchBusinessRules()
-    ]);
-    setIsRefreshing(false);
+    try {
+      await Promise.all([
+        fetchOrders(), fetchProducts(), fetchCategories(),
+        fetchGlobalSettings(), fetchBusinessRules()
+      ]);
+      toast.success('تم تحديث البيانات بنجاح');
+    } catch (err) {
+      console.warn('Error refreshing admin data:', err);
+      toast.error('تعذر جلب بعض البيانات، يرجى المحاولة مرة أخرى');
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   // Load option groups when switching to analytics tab (needed for sauce catalog)
