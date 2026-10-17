@@ -12,6 +12,9 @@ import {
   productsService,
   settingsService,
   ordersService,
+  getStoredOrders,
+  saveOrdersToCache,
+  mergeOrders,
 } from '../../services/firestore';
 import {
   isBranchOpen,
@@ -209,7 +212,7 @@ export const useStore = create<AppState>()(
       optionGroupLoadingByProductId: {},
       allOptionGroups: Object.values(INITIAL_OPTION_GROUPS_BY_PRODUCT).flat(),
       cart: [],
-      orders: [],
+      orders: getStoredOrders(),
       orderType: null,
       loading: false,
       error: null,
@@ -348,15 +351,21 @@ export const useStore = create<AppState>()(
       fetchOrders: async () => {
         try {
           const orders = await ordersService.getAllOrders();
-          set({ orders });
+          if (orders && orders.length > 0) {
+            set((state) => {
+              const merged = mergeOrders(state.orders, orders);
+              saveOrdersToCache(merged);
+              return { orders: merged };
+            });
+          }
         } catch (error) {
-          console.error('Failed to fetch orders:', error);
+          console.error('Failed to fetch orders, retaining cached orders:', error);
         }
       },
 
       fetchActiveOrder: async () => {
         try {
-          const orders = await ordersService.getAllOrders();
+          const orders = get().orders.length > 0 ? get().orders : await ordersService.getAllOrders();
           const active = orders.find(
             (o) => o.status !== 'completed' && o.status !== 'cancelled'
           );
@@ -565,7 +574,40 @@ export const useStore = create<AppState>()(
             })),
           });
 
-          set({ loading: false });
+          // Optimistically update orders in store with new order so admin/user sees it instantly
+          const newOrder: Order = {
+            id: orderId,
+            customer_name: orderData.customer_name,
+            customer_phone: orderData.customer_phone,
+            address: orderData.address,
+            user_id: orderData.user_id,
+            type: orderData.type,
+            branch: orderData.branch,
+            total: clientComputedTotal,
+            status: 'new',
+            created_at: new Date().toISOString(),
+            items: orderData.items.map((item) => ({
+              id: 'item_' + Math.random().toString(36).substring(2, 7),
+              product_id: item.id,
+              name_ar: item.name_ar,
+              quantity: item.quantity,
+              unit_price: (item.price ?? 0) + (item.optionsPrice ?? 0),
+              selected_option_ids: item.selectedOptionIds,
+              special_instructions: item.specialInstructions,
+            })),
+          };
+
+          set((state) => {
+            const updated = [newOrder, ...state.orders.filter((o) => o.id !== orderId)];
+            saveOrdersToCache(updated);
+            return { orders: updated, loading: false };
+          });
+
+          broadcastSyncEvent({
+            type: 'ORDER_CREATED',
+            order: newOrder,
+          });
+
           return orderId;
         } catch (err: any) {
           set({ loading: false, error: err.message || 'فشل إنشاء الطلب' });
@@ -657,11 +699,19 @@ export const useStore = create<AppState>()(
       },
 
       updateOrderStatus: async (orderId, status) => {
-        set((state) => ({
-          orders: state.orders.map((o) =>
+        set((state) => {
+          const updated = state.orders.map((o) =>
             o.id === orderId ? { ...o, status } : o
-          ),
-        }));
+          );
+          saveOrdersToCache(updated);
+          return { orders: updated };
+        });
+
+        broadcastSyncEvent({
+          type: 'ORDER_STATUS_CHANGED',
+          orderId,
+          status,
+        });
 
         try {
           await ordersService.updateOrderStatus(orderId, status);
@@ -1016,6 +1066,7 @@ export const useStore = create<AppState>()(
       partialize: (state) => ({
         cart: state.cart,
         orderType: state.orderType,
+        orders: state.orders,
       }),
     }
   )

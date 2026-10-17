@@ -2,7 +2,14 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore, OrderStatus, Product } from '../store/useStore';
 import { useAuthStore } from '../store/useAuthStore';
-import { ordersService, productsService, settingsService } from '../../services/firestore';
+import {
+  ordersService,
+  productsService,
+  settingsService,
+  getStoredOrders,
+  mergeOrders,
+  saveOrdersToCache,
+} from '../../services/firestore';
 import { ProductEditModal } from './ProductEditModal';
 import {
   Package,
@@ -153,18 +160,34 @@ export const AdminView: React.FC = () => {
   useEffect(() => {
     const loadData = async () => {
       setIsLoading(true);
-      await Promise.all([
-        fetchOrders(), fetchProducts(), fetchCategories(),
-        fetchGlobalSettings(), fetchBusinessRules()
-      ]);
-      setIsLoading(false);
+      try {
+        await Promise.all([
+          fetchOrders(), fetchProducts(), fetchCategories(),
+          fetchGlobalSettings(), fetchBusinessRules()
+        ]);
+      } catch (err) {
+        console.warn('[AdminView] Error loading fresh data, retaining cached state:', err);
+      } finally {
+        setIsLoading(false);
+      }
     };
     loadData();
 
     // Subscribe to real-time updates (orders, products, settings)
-    const unsubscribeOrders = ordersService.subscribeToAllOrders((liveOrders) => {
-      useStore.setState({ orders: liveOrders });
-    });
+    const unsubscribeOrders = ordersService.subscribeToAllOrders(
+      (liveOrders) => {
+        if (liveOrders && liveOrders.length > 0) {
+          useStore.setState((state) => {
+            const merged = mergeOrders(state.orders, liveOrders);
+            saveOrdersToCache(merged);
+            return { orders: merged };
+          });
+        }
+      },
+      (err) => {
+        console.warn('[AdminView] Realtime orders stream error, retained cached orders:', err);
+      }
+    );
     const unsubscribeProducts = productsService.subscribeToProducts((liveProducts) => {
       useStore.getState().setProducts(liveProducts);
     });
@@ -447,11 +470,18 @@ export const AdminView: React.FC = () => {
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    await Promise.all([
-      fetchOrders(), fetchProducts(), fetchCategories(),
-      fetchGlobalSettings(), fetchBusinessRules()
-    ]);
-    setIsRefreshing(false);
+    try {
+      await Promise.all([
+        fetchOrders(), fetchProducts(), fetchCategories(),
+        fetchGlobalSettings(), fetchBusinessRules()
+      ]);
+      toast.success('تم تحديث البيانات بنجاح');
+    } catch (err) {
+      console.warn('Error refreshing admin data:', err);
+      toast.error('تعذر جلب بعض البيانات، تم الإبقاء على البيانات المحفوظة');
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   // Load option groups when switching to analytics tab (needed for sauce catalog)

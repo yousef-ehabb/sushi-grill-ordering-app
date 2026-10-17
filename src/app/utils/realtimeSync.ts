@@ -4,6 +4,8 @@ export type SyncEvent =
   | { type: 'PRODUCT_AVAILABILITY_CHANGED'; productId: string; is_available: boolean; timestamp: number }
   | { type: 'PRODUCT_UPDATED'; productId: string; data: Partial<Product>; timestamp: number }
   | { type: 'GLOBAL_SETTINGS_CHANGED'; settings: Partial<GlobalSettings>; timestamp: number }
+  | { type: 'ORDER_CREATED'; order: any; timestamp: number }
+  | { type: 'ORDER_STATUS_CHANGED'; orderId: string; status: any; timestamp: number }
   | { type: 'FORCE_REFRESH'; timestamp: number };
 
 const CHANNEL_NAME = 'sushi_grill_live_sync';
