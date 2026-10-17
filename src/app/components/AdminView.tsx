@@ -56,10 +56,17 @@ import {
   Key,
   Eye,
   EyeOff,
+  Calendar,
 } from 'lucide-react';
 import { resolveAllOptionNames } from '../utils/optionNames';
 import { getDisplayOrderId, isCancellable } from '../utils/orderUtils';
 import { printOrderReceipt } from '../utils/receiptPrinter';
+import {
+  getBusinessDayKey,
+  getCurrentBusinessDayKey,
+  getYesterdayBusinessDayKey,
+  formatBusinessDayArabic,
+} from '../utils/businessDay';
 import { clsx } from 'clsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { Toaster, toast } from 'sonner';
@@ -89,7 +96,17 @@ export const AdminView: React.FC = () => {
   // Orders section filter & collapsible state
   const [orderStatusFilter, setOrderStatusFilter] = useState<'all' | OrderStatus>('all');
   const [selectedBranchFilter, setSelectedBranchFilter] = useState<'all' | 'فرع الاستاد' | 'فرع الكرفان'>('all');
+  const [dateFilterMode, setDateFilterMode] = useState<'today' | 'yesterday' | 'custom' | 'all'>('today');
+  const [customBusinessDate, setCustomBusinessDate] = useState<string>(() => getCurrentBusinessDayKey());
   const [collapsedOrderIds, setCollapsedOrderIds] = useState<Set<string>>(new Set());
+
+  // Active business day key ("YYYY-MM-DD" or "all")
+  const activeDateFilterKey = useMemo(() => {
+    if (dateFilterMode === 'today') return getCurrentBusinessDayKey();
+    if (dateFilterMode === 'yesterday') return getYesterdayBusinessDayKey();
+    if (dateFilterMode === 'custom') return customBusinessDate || getCurrentBusinessDayKey();
+    return 'all';
+  }, [dateFilterMode, customBusinessDate]);
 
   // ── Real-time new order notifications ──
   const {
@@ -106,6 +123,52 @@ export const AdminView: React.FC = () => {
     if (adminBranchScope === 'all') return orders;
     return orders.filter(o => o.branch === adminBranchScope);
   }, [orders, adminBranchScope]);
+
+  // Orders filtered by active branch scope AND active business day (before status filter)
+  const dateAndBranchScopedOrders = useMemo(() => {
+    return branchScopedOrders.filter(o => {
+      // 1. Branch filter
+      const matchesBranch = adminBranchScope !== 'all'
+        ? true
+        : (selectedBranchFilter === 'all' || o.branch === selectedBranchFilter);
+      if (!matchesBranch) return false;
+
+      // 2. Business day filter (12:00 PM to 02:00 AM shift definition)
+      if (activeDateFilterKey === 'all') return true;
+      const orderDayKey = getBusinessDayKey(o.created_at);
+      return orderDayKey === activeDateFilterKey;
+    });
+  }, [branchScopedOrders, selectedBranchFilter, adminBranchScope, activeDateFilterKey]);
+
+  // Counts of orders in each business day preset (respecting active branch filter)
+  const dateCounts = useMemo(() => {
+    const todayKey = getCurrentBusinessDayKey();
+    const yesterdayKey = getYesterdayBusinessDayKey();
+
+    const relevant = branchScopedOrders.filter(o => {
+      return adminBranchScope !== 'all'
+        ? true
+        : (selectedBranchFilter === 'all' || o.branch === selectedBranchFilter);
+    });
+
+    let today = 0;
+    let yesterday = 0;
+    let custom = 0;
+
+    for (const o of relevant) {
+      const k = getBusinessDayKey(o.created_at);
+      if (k === todayKey) today++;
+      if (k === yesterdayKey) yesterday++;
+      if (dateFilterMode === 'custom' && k === customBusinessDate) custom++;
+    }
+
+    return {
+      today,
+      yesterday,
+      custom,
+      all: relevant.length,
+    };
+  }, [branchScopedOrders, adminBranchScope, selectedBranchFilter, dateFilterMode, customBusinessDate]);
 
   const toggleOrderCollapse = (orderId: string) => {
     setCollapsedOrderIds(prev => {
@@ -141,7 +204,7 @@ export const AdminView: React.FC = () => {
 
   const orderCounts = useMemo(() => {
     const counts: Record<string, number> = {
-      all: branchScopedOrders.length,
+      all: dateAndBranchScopedOrders.length,
       new: 0,
       preparing: 0,
       ready: 0,
@@ -149,31 +212,33 @@ export const AdminView: React.FC = () => {
       completed: 0,
       cancelled: 0,
     };
-    branchScopedOrders.forEach(o => {
+    dateAndBranchScopedOrders.forEach(o => {
       if (counts[o.status] !== undefined) {
         counts[o.status]++;
       }
     });
     return counts;
-  }, [branchScopedOrders]);
+  }, [dateAndBranchScopedOrders]);
 
   const branchCounts = useMemo(() => {
+    // Orders filtered by the active business day
+    const dateOrders = activeDateFilterKey === 'all'
+      ? orders
+      : orders.filter(o => getBusinessDayKey(o.created_at) === activeDateFilterKey);
+
     return {
-      all: orders.length,
-      stadium: orders.filter(o => o.branch === 'فرع الاستاد').length,
-      caravan: orders.filter(o => o.branch === 'فرع الكرفان').length,
+      all: dateOrders.length,
+      stadium: dateOrders.filter(o => o.branch === 'فرع الاستاد').length,
+      caravan: dateOrders.filter(o => o.branch === 'فرع الكرفان').length,
     };
-  }, [orders]);
+  }, [orders, activeDateFilterKey]);
 
   const filteredOrders = useMemo(() => {
-    return branchScopedOrders.filter(o => {
+    return dateAndBranchScopedOrders.filter(o => {
       const matchesStatus = orderStatusFilter === 'all' || o.status === orderStatusFilter;
-      const matchesBranch = adminBranchScope !== 'all'
-        ? true
-        : (selectedBranchFilter === 'all' || o.branch === selectedBranchFilter);
-      return matchesStatus && matchesBranch;
+      return matchesStatus;
     });
-  }, [branchScopedOrders, orderStatusFilter, selectedBranchFilter, adminBranchScope]);
+  }, [dateAndBranchScopedOrders, orderStatusFilter]);
 
   // Local state for controls form
   const [localClosedMessage, setLocalClosedMessage] = useState('');
@@ -267,15 +332,14 @@ export const AdminView: React.FC = () => {
   }, [branchScopedOrders]);
 
   const todayStats = useMemo(() => {
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const todayKey = getCurrentBusinessDayKey();
 
     let revenue = 0;
     let count = 0;
 
     for (const order of validOrders) {
-      const orderDate = new Date(order.created_at).getTime();
-      if (!isNaN(orderDate) && orderDate >= startOfToday) {
+      const orderDayKey = getBusinessDayKey(order.created_at);
+      if (orderDayKey === todayKey) {
         revenue += (order.total || 0);
         count += 1;
       }
@@ -285,15 +349,16 @@ export const AdminView: React.FC = () => {
   }, [validOrders]);
 
   const monthStats = useMemo(() => {
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    const todayKey = getCurrentBusinessDayKey();
+    const [currentYear, currentMonth] = todayKey.split('-').map(Number);
+    const targetMonthPrefix = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
 
     let revenue = 0;
     let count = 0;
 
     for (const order of validOrders) {
-      const orderDate = new Date(order.created_at).getTime();
-      if (!isNaN(orderDate) && orderDate >= startOfMonth) {
+      const orderDayKey = getBusinessDayKey(order.created_at);
+      if (orderDayKey && orderDayKey.startsWith(targetMonthPrefix)) {
         revenue += (order.total || 0);
         count += 1;
       }
@@ -735,7 +800,7 @@ export const AdminView: React.FC = () => {
                 <h2 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
                   <span>الطلبات الواردة</span>
                   <span className="text-xs bg-red-50 text-primary border border-red-100 font-bold px-2.5 py-0.5 rounded-full">
-                    {branchScopedOrders.length} {branchScopedOrders.length === 1 ? 'طلب' : 'طلبات'}
+                    {dateAndBranchScopedOrders.length} {dateAndBranchScopedOrders.length === 1 ? 'طلب' : 'طلبات'}
                   </span>
                 </h2>
                 <p className="text-slate-500 text-xs mt-0.5">
@@ -847,6 +912,120 @@ export const AdminView: React.FC = () => {
                 )}
               </div>
 
+              {/* Date Filter Row (Business Day: 12:00 PM - 02:00 AM) */}
+              <div className="flex flex-wrap items-center justify-between gap-2.5 pb-2 border-b border-slate-100">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-xs font-bold text-slate-500 flex items-center gap-1 ml-1">
+                    <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                    <span>تاريخ الوردية:</span>
+                  </span>
+
+                  <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs font-bold flex-wrap">
+                    {/* اليوم (Today) */}
+                    <button
+                      type="button"
+                      onClick={() => setDateFilterMode('today')}
+                      className={clsx(
+                        "px-3 py-1.5 rounded-lg transition-all text-xs flex items-center gap-1.5 cursor-pointer font-bold",
+                        dateFilterMode === 'today'
+                          ? "bg-white text-slate-900 shadow-xs"
+                          : "text-slate-500 hover:text-slate-800"
+                      )}
+                    >
+                      <span>اليوم</span>
+                      <span className={clsx(
+                        "text-[10px] px-1.5 py-0.2 rounded-full font-black",
+                        dateFilterMode === 'today' ? "bg-primary/10 text-primary" : "bg-slate-200/70 text-slate-600"
+                      )}>
+                        {dateCounts.today}
+                      </span>
+                    </button>
+
+                    {/* أمس (Yesterday) */}
+                    <button
+                      type="button"
+                      onClick={() => setDateFilterMode('yesterday')}
+                      className={clsx(
+                        "px-3 py-1.5 rounded-lg transition-all text-xs flex items-center gap-1.5 cursor-pointer font-bold",
+                        dateFilterMode === 'yesterday'
+                          ? "bg-white text-slate-900 shadow-xs"
+                          : "text-slate-500 hover:text-slate-800"
+                      )}
+                    >
+                      <span>أمس</span>
+                      <span className={clsx(
+                        "text-[10px] px-1.5 py-0.2 rounded-full font-black",
+                        dateFilterMode === 'yesterday' ? "bg-primary/10 text-primary" : "bg-slate-200/70 text-slate-600"
+                      )}>
+                        {dateCounts.yesterday}
+                      </span>
+                    </button>
+
+                    {/* تحديد تاريخ (Custom Date Picker) */}
+                    <div className={clsx(
+                      "flex items-center gap-1 px-2.5 py-1 rounded-lg transition-all text-xs font-bold",
+                      dateFilterMode === 'custom'
+                        ? "bg-white text-slate-900 shadow-xs"
+                        : "text-slate-500 hover:text-slate-800"
+                    )}>
+                      <button
+                        type="button"
+                        onClick={() => setDateFilterMode('custom')}
+                        className="cursor-pointer text-xs font-bold flex items-center gap-1"
+                      >
+                        <Calendar className="w-3.5 h-3.5 text-primary" />
+                        <span>تحديد تاريخ</span>
+                      </button>
+                      <input
+                        type="date"
+                        value={customBusinessDate}
+                        onChange={(e) => {
+                          setCustomBusinessDate(e.target.value);
+                          setDateFilterMode('custom');
+                        }}
+                        className="bg-slate-100/80 hover:bg-slate-200/60 focus:bg-white text-slate-800 text-xs px-2 py-0.5 rounded-md border border-slate-200 outline-none cursor-pointer"
+                        title="اختر تاريخ وردية المطعم"
+                      />
+                      {dateFilterMode === 'custom' && (
+                        <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.2 rounded-full font-black">
+                          {dateCounts.custom}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* الكل (All Orders) */}
+                    <button
+                      type="button"
+                      onClick={() => setDateFilterMode('all')}
+                      className={clsx(
+                        "px-3 py-1.5 rounded-lg transition-all text-xs flex items-center gap-1.5 cursor-pointer font-bold",
+                        dateFilterMode === 'all'
+                          ? "bg-white text-slate-900 shadow-xs"
+                          : "text-slate-500 hover:text-slate-800"
+                      )}
+                    >
+                      <span>كل التواريخ</span>
+                      <span className="text-[10px] bg-slate-200/70 text-slate-600 px-1.5 py-0.2 rounded-full font-black">
+                        {dateCounts.all}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Business Day Badge & Shift Details */}
+                <div className="flex items-center gap-2">
+                  <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/70">
+                    <Clock className="w-3 h-3 text-amber-500" />
+                    <span>الوردية: 12:00 م — 02:00 ص</span>
+                  </span>
+                  {activeDateFilterKey && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-primary bg-red-50/80 border border-red-100 px-2.5 py-1 rounded-lg">
+                      <span>{formatBusinessDayArabic(activeDateFilterKey)}</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+
               {/* Status Filter Pills */}
               <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 w-full scrollbar-none">
                 {[
@@ -895,8 +1074,22 @@ export const AdminView: React.FC = () => {
               {filteredOrders.length === 0 ? (
                 <div className="col-span-full bg-white rounded-2xl p-16 text-center border-2 border-dashed border-slate-200">
                   <Package className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                  <p className="text-slate-600 font-bold text-sm">لا توجد طلبات في هذا القسم</p>
-                  <p className="text-slate-400 text-xs mt-1">جرّب اختيار فلتر آخر أو انتظار طلبات جديدة</p>
+                  <p className="text-slate-600 font-bold text-sm">
+                    {dateFilterMode !== 'all' && activeDateFilterKey
+                      ? `لا توجد طلبات في وردية (${formatBusinessDayArabic(activeDateFilterKey)})`
+                      : 'لا توجد طلبات في هذا القسم'}
+                  </p>
+                  <p className="text-slate-400 text-xs mt-1">جرّب اختيار فلتر آخر أو تاريخ مختلف</p>
+                  {dateFilterMode !== 'all' && (
+                    <button
+                      type="button"
+                      onClick={() => setDateFilterMode('all')}
+                      className="mt-3 inline-flex items-center gap-1.5 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all cursor-pointer"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>عرض كل الطلبات السابقة ({dateCounts.all})</span>
+                    </button>
+                  )}
                 </div>
               ) : (
                 filteredOrders.map((order) => {
