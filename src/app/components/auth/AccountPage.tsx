@@ -9,9 +9,11 @@ import { motion } from 'motion/react';
 import { collection, getDocs, query, where, orderBy } from 'firebase/firestore';
 import { db, isFirebaseConfigured } from '../../../lib/firebase';
 import { formatPhoneDisplay } from '../../../lib/phoneUtils';
+import { getDisplayOrderId } from '../../utils/orderUtils';
 
 interface Order {
     id: string;
+    order_number?: number;
     customer_name: string;
     type: string;
     total: number;
@@ -346,7 +348,7 @@ export const AccountPage: React.FC = () => {
                                         <div className="flex items-center justify-between mb-3">
                                             <div className="flex items-center gap-2">
                                                 <span className={`font-mono text-sm font-bold ${isArchived ? 'text-slate-400' : 'text-slate-900'}`}>
-                                                    #{order.id.slice(0, 8).toUpperCase()}
+                                                    {getDisplayOrderId(order)}
                                                 </span>
                                                 <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${status.color}`}>
                                                     {status.label}

@@ -250,6 +250,12 @@ export const ordersService = {
       }
     }
 
+    // In local dev, Vite intercepts /api/ requests and tries to bundle the serverless
+    // functions (which use firebase-admin). Skip the server call entirely in DEV.
+    if (import.meta.env.DEV) {
+      return await this.createOrderDirectFallback(orderData);
+    }
+
     let response: Response;
     try {
       response = await fetch('/api/orders/create', {
@@ -327,10 +333,16 @@ export const ordersService = {
    * Track order for guests securely through the server endpoint
    */
   async trackGuestOrder(orderId: string, phone: string): Promise<Order | null> {
+    // In local dev, Vite intercepts /api/ requests and tries to bundle the serverless
+    // functions (which use firebase-admin). Skip the server call entirely in DEV.
+    if (import.meta.env.DEV) {
+      return await this.getOrderById(orderId);
+    }
+
     try {
       const res = await fetch(`/api/orders/track?orderId=${encodeURIComponent(orderId)}&phone=${encodeURIComponent(phone)}`);
-      if (res.status === 404 && import.meta.env.DEV) {
-        console.warn('[OrdersService] /api/orders/track is 404 in local Vite dev server. Falling back to direct getOrderById.');
+      if (!res.ok) {
+        console.warn(`[OrdersService] /api/orders/track returned ${res.status}. Falling back to direct getOrderById.`);
         return await this.getOrderById(orderId);
       }
       const data = await res.json().catch(() => null);

@@ -609,7 +609,7 @@ export const useStore = create<AppState>()(
             user_id: orderData.user_id,
             type: orderData.type,
             branch: orderData.branch,
-            total: clientComputedTotal,
+            total: orderData.total || 0,
             status: 'new',
             created_at: new Date().toISOString(),
             items: orderData.items.map((item) => ({

@@ -174,14 +174,15 @@ export const CartSidebar: React.FC<CartSidebarProps> = ({ isOpen, onClose, onChe
                       />
                     </div>
                     <div className="flex-grow flex flex-col justify-between">
-                      <div className="flex justify-between items-start">
+                      <div className="flex justify-between items-start gap-2">
                         <h4 className="font-bold text-slate-900 leading-tight line-clamp-1">{item.name_ar}</h4>
                         <button
                           onClick={() => removeFromCart(item.cartKey)}
-                          className="bg-red-50 text-red-500 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-all hover:bg-red-100"
-                          title="حذف"
+                          className="bg-red-50 text-red-500 hover:text-red-600 hover:bg-red-100 p-1.5 rounded-lg transition-all shrink-0 active:scale-95 cursor-pointer"
+                          title="حذف الصنف"
+                          aria-label={`حذف ${item.name_ar}`}
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
                       <div className="space-y-0.5">
