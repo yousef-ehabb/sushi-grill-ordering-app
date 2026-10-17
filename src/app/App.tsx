@@ -461,6 +461,7 @@ const CustomerLayout: React.FC = () => {
         onClose={() => setIsCheckoutOpen(false)}
         onOpenTracking={(orderId, phone) => {
           setGuestTrackingParams({ orderId, phone });
+          useStore.setState({ activeOrder: { id: orderId, status: 'new' } });
           setIsActiveOrderOpen(true);
         }}
         onOrderSuccess={(receipt) => {
@@ -475,11 +476,12 @@ const CustomerLayout: React.FC = () => {
         onOpenTracking={(orderId, phone) => {
           setConfirmationReceipt(null);
           setGuestTrackingParams({ orderId, phone });
+          useStore.setState({ activeOrder: { id: orderId, status: 'new' } });
           setIsActiveOrderOpen(true);
         }}
       />
       <ActiveOrderModal
-        orderId={activeOrder?.id ?? guestTrackingParams?.orderId ?? null}
+        orderId={guestTrackingParams?.orderId ?? activeOrder?.id ?? null}
         guestPhone={guestTrackingParams?.phone ?? null}
         isOpen={isActiveOrderOpen}
         onClose={() => {

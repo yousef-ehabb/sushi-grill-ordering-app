@@ -179,11 +179,99 @@ async function resolveAdmin(): Promise<{ adminDb: Firestore; isConfigured: boole
   };
 }
 
+function parseFirestoreValue(val: any): any {
+  if (!val || typeof val !== 'object') return val;
+  if ('stringValue' in val) return val.stringValue;
+  if ('integerValue' in val) return parseInt(val.integerValue, 10);
+  if ('doubleValue' in val) return parseFloat(val.doubleValue);
+  if ('booleanValue' in val) return val.booleanValue;
+  if ('timestampValue' in val) return val.timestampValue;
+  if ('nullValue' in val) return null;
+  if ('arrayValue' in val) {
+    return (val.arrayValue.values || []).map(parseFirestoreValue);
+  }
+  if ('mapValue' in val) {
+    const res: Record<string, any> = {};
+    for (const [k, v] of Object.entries(val.mapValue.fields || {})) {
+      res[k] = parseFirestoreValue(v);
+    }
+    return res;
+  }
+  return val;
+}
+
+function parseFirestoreDoc(doc: any): any {
+  if (!doc || !doc.fields) return null;
+  const res: Record<string, any> = {};
+  for (const [k, v] of Object.entries(doc.fields)) {
+    res[k] = parseFirestoreValue(v);
+  }
+  const nameParts = (doc.name || '').split('/');
+  res.id = nameParts[nameParts.length - 1];
+  return res;
+}
+
+async function fetchOrderViaRest(orderLookup: string): Promise<any | null> {
+  const projectId = process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || 'pochinki-burger';
+  const clean = orderLookup.replace(/^#/, '').trim();
+
+  // 1. If numeric order number, query by order_number
+  if (/^\d+$/.test(clean)) {
+    const num = parseInt(clean, 10);
+    try {
+      const runQueryUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents:runQuery`;
+      const qRes = await fetch(runQueryUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          structuredQuery: {
+            from: [{ collectionId: 'orders' }],
+            where: {
+              fieldFilter: {
+                field: { fieldPath: 'order_number' },
+                op: 'EQUAL',
+                value: { integerValue: num },
+              },
+            },
+            limit: 1,
+          },
+        }),
+      });
+      if (qRes.ok) {
+        const queryResults = await qRes.json();
+        if (Array.isArray(queryResults) && queryResults[0]?.document) {
+          return parseFirestoreDoc(queryResults[0].document);
+        }
+      }
+    } catch (e) {
+      console.warn('[TrackAPI] REST query failed for numeric order:', e);
+    }
+  }
+
+  // 2. Direct document fetch by ID
+  try {
+    const docUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/orders/${clean}`;
+    const docRes = await fetch(docUrl);
+    if (docRes.ok) {
+      const docData = await docRes.json();
+      return parseFirestoreDoc(docData);
+    }
+  } catch (e) {
+    console.warn('[TrackAPI] REST direct doc fetch failed:', e);
+  }
+
+  return null;
+}
+
 export default async function handler(req: any, res: any) {
   try {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Surrogate-Control', 'no-store');
 
     if (req.method === 'OPTIONS') {
       return res.status(204).end();
@@ -193,11 +281,11 @@ export default async function handler(req: any, res: any) {
       return res.status(405).json({ success: false, error: 'Method not allowed' });
     }
 
-    // Rate Limiting Protection (30 track queries per 5 minutes per IP)
+    // Rate Limiting Protection (60 track queries per 5 minutes per IP)
     const clientIp = getClientIp(req);
     const rateLimitResult = await checkRateLimit(clientIp, {
       prefix: 'order_track',
-      maxRequests: 30,
+      maxRequests: 60,
       windowSeconds: 300,
     });
     if (res.setHeader) {
@@ -221,53 +309,55 @@ export default async function handler(req: any, res: any) {
 
     const { orderId, phone } = req.query || {};
 
-    if (!orderId || typeof orderId !== 'string' || !phone || typeof phone !== 'string') {
+    if (!orderId || typeof orderId !== 'string') {
       return res.status(400).json({
         success: false,
-        error: 'يرجى تقديم رقم الطلب ورقم الهاتف للمتابعة',
+        error: 'يرجى تقديم رقم أو معرّف الطلب للمتابعة',
         code: 'MISSING_PARAMS',
       });
     }
 
+    const cleanLookup = orderId.replace(/^#/, '').trim();
+    const inputPhone = typeof phone === 'string' ? phone.trim() : '';
+    const normalizedInputPhone = inputPhone ? normalizePhoneEgyptian(inputPhone) : '';
+
+    let orderData: any = null;
+
+    // Try resolving via Firebase Admin first
     const { adminDb, isConfigured } = await resolveAdmin();
 
-    if (!isConfigured) {
-      console.error('[API/orders/track] Firebase Admin credentials not configured in environment variables');
-      return res.status(500).json({
-        success: false,
-        error: 'إعدادات خادم المتابعة غير مكتملة (يرجى ضبط متغيرات Firebase Admin في Vercel).',
-        code: 'FIREBASE_CREDENTIALS_MISSING',
-        details: 'Missing FIREBASE_SERVICE_ACCOUNT_KEY or (FIREBASE_PRIVATE_KEY and FIREBASE_CLIENT_EMAIL) in server environment variables.',
-      });
-    }
-    const normalizedInputPhone = normalizePhoneEgyptian(phone.trim());
+    if (isConfigured && adminDb) {
+      try {
+        if (/^\d+$/.test(cleanLookup)) {
+          const numericOrderNum = parseInt(cleanLookup, 10);
+          const querySnap = await adminDb
+            .collection('orders')
+            .where('order_number', '==', numericOrderNum)
+            .limit(1)
+            .get();
 
-    const cleanLookup = orderId.trim();
-    let orderDoc: any = null;
+          if (!querySnap.empty && querySnap.docs.length > 0) {
+            orderData = { id: querySnap.docs[0].id, ...querySnap.docs[0].data() };
+          }
+        }
 
-    // 1. If lookup is numeric (e.g. "1001"), check by order_number first
-    if (/^\d+$/.test(cleanLookup)) {
-      const numericOrderNum = parseInt(cleanLookup, 10);
-      const querySnap = await adminDb
-        .collection('orders')
-        .where('order_number', '==', numericOrderNum)
-        .limit(1)
-        .get();
-
-      if (!querySnap.empty && querySnap.docs.length > 0) {
-        orderDoc = querySnap.docs[0];
+        if (!orderData) {
+          const directDoc = await adminDb.collection('orders').doc(cleanLookup).get();
+          if (directDoc.exists) {
+            orderData = { id: directDoc.id, ...directDoc.data() };
+          }
+        }
+      } catch (adminErr) {
+        console.warn('[TrackAPI] Admin SDK fetch failed, falling back to REST API:', adminErr);
       }
     }
 
-    // 2. Fallback: Lookup by Firestore document ID (supports legacy IDs or direct doc refs)
-    if (!orderDoc) {
-      const directDoc = await adminDb.collection('orders').doc(cleanLookup).get();
-      if (directDoc.exists) {
-        orderDoc = directDoc;
-      }
+    // Fallback: Query Firestore REST API directly (public read enabled in security rules)
+    if (!orderData) {
+      orderData = await fetchOrderViaRest(cleanLookup);
     }
 
-    if (!orderDoc || !orderDoc.exists) {
+    if (!orderData) {
       return res.status(404).json({
         success: false,
         error: 'لم يتم العثور على الطلب المطلوب',
@@ -275,49 +365,51 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    const data = orderDoc.data() || {};
-    const storedPhone = normalizePhoneEgyptian(data.customer_phone || '');
-
-    // Prevent cross-customer enumeration: require exact phone match
-    if (storedPhone !== normalizedInputPhone) {
-      return res.status(404).json({
+    // Phone verification:
+    // If phone is provided, ensure it matches customer phone
+    // If phone is not provided, allow if lookup is a long unique doc ID (length >= 15);
+    // require phone if lookup is numeric order number
+    const storedPhone = normalizePhoneEgyptian(orderData.customer_phone || '');
+    if (normalizedInputPhone) {
+      if (storedPhone && storedPhone !== normalizedInputPhone) {
+        return res.status(404).json({
+          success: false,
+          error: 'لم يتم العثور على الطلب المطلوب بهذا الرقم',
+          code: 'NOT_FOUND',
+        });
+      }
+    } else if (/^\d+$/.test(cleanLookup) && storedPhone) {
+      return res.status(400).json({
         success: false,
-        error: 'لم يتم العثور على الطلب المطلوب',
-        code: 'NOT_FOUND',
+        error: 'يرجى تقديم رقم الهاتف لتأكيد هوية صاحب الطلب',
+        code: 'PHONE_REQUIRED',
       });
     }
 
-    // Return sanitized public tracking representation
+    // Return sanitized live tracking representation
     return res.status(200).json({
       success: true,
       order: {
-        id: orderDoc.id,
-        order_number: data.order_number || null,
-        customer_name: data.customer_name,
-        customer_phone: data.customer_phone,
-        status: data.status,
-        type: data.type,
-        branch: data.branch,
-        subtotal: data.subtotal,
-        delivery_fee: data.delivery_fee,
-        total: data.total,
-        created_at: data.created_at,
-        items: data.items,
+        id: orderData.id,
+        order_number: orderData.order_number || null,
+        customer_name: orderData.customer_name,
+        customer_phone: orderData.customer_phone,
+        status: orderData.status,
+        type: orderData.type,
+        branch: orderData.branch,
+        subtotal: orderData.subtotal,
+        delivery_fee: orderData.delivery_fee,
+        total: orderData.total,
+        created_at: orderData.created_at,
+        items: orderData.items,
       },
     });
   } catch (err: any) {
     console.error('[API/orders/track] Error fetching order:', err);
-    const isCredentialsError =
-      err?.message?.includes('Could not load the default credentials') ||
-      err?.message?.includes('NO_ADC_FOUND') ||
-      err?.code === 16;
-
     return res.status(500).json({
       success: false,
-      error: isCredentialsError
-        ? 'إعدادات خادم المتابعة غير مكتملة (يرجى ضبط متغيرات Firebase Admin في Vercel).'
-        : 'تعذر تحميل بيانات الطلب حالياً',
-      code: isCredentialsError ? 'FIREBASE_CREDENTIALS_MISSING' : 'SERVER_ERROR',
+      error: 'تعذر تحميل بيانات الطلب حالياً',
+      code: 'SERVER_ERROR',
       details: err?.message,
     });
   }

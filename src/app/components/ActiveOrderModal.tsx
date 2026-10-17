@@ -102,11 +102,13 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
         if (guestPhone) setManualPhone(guestPhone);
 
         // Check for last saved order in localStorage for guest convenience
+        let savedGuestOrder: LastSavedOrder | null = null;
         try {
             const saved = localStorage.getItem('pochinki_last_order');
             if (saved) {
                 const parsed: LastSavedOrder = JSON.parse(saved);
                 if (parsed && (parsed.orderId || parsed.orderNumber) && parsed.phone) {
+                    savedGuestOrder = parsed;
                     setLastSavedOrder(parsed);
                     if (!orderId) {
                         setManualOrderId((prev) => prev || (parsed.orderNumber ? String(parsed.orderNumber) : parsed.orderId));
@@ -125,10 +127,15 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
             fetchAuthenticatedOrder(orderId);
         }
         // Scenario 2: Guest with passed initial orderId and phone (e.g. right after checkout)
-        else if (orderId && guestPhone) {
-            fetchGuestOrder(orderId, guestPhone);
+        else if (orderId && (guestPhone || savedGuestOrder?.phone)) {
+            fetchGuestOrder(orderId, guestPhone || savedGuestOrder?.phone || '');
         }
-        // Scenario 3: Manual search modal
+        // Scenario 3: Saved guest order in localStorage when opened from tracking button
+        else if (savedGuestOrder && (savedGuestOrder.orderId || savedGuestOrder.orderNumber) && savedGuestOrder.phone) {
+            const idToTrack = savedGuestOrder.orderId || String(savedGuestOrder.orderNumber);
+            fetchGuestOrder(idToTrack, savedGuestOrder.phone);
+        }
+        // Scenario 4: Manual search modal
         else {
             setOrder(null);
             setLoading(false);
@@ -391,6 +398,7 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
                 try {
                     localStorage.removeItem('pochinki_last_order');
                     setLastSavedOrder(null);
+                    useStore.setState({ activeOrder: null });
                 } catch {
                     // ignore
                 }
@@ -414,6 +422,13 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
                 total: guestOrder.total,
                 created_at: guestOrder.created_at,
                 items,
+            });
+
+            useStore.setState({
+                activeOrder: {
+                    id: guestOrder.id,
+                    status: guestOrder.status,
+                },
             });
         } catch {
             setFetchError('حدث خطأ أثناء الاستعلام عن الطلب. يرجى المحاولة مرة أخرى.');

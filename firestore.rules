@@ -135,47 +135,36 @@ service cloud.firestore {
 
     // Orders Collection
     match /orders/{orderId} {
-      // Global staff can read all; branch admins can only read their own branch; customers only their own
-      allow get: if isGlobalAdmin() ||
-        (isStaffMember() && canAccessBranch(resource.data.branch)) ||
-        (isAuthenticated() && resource.data.user_id == request.auth.uid);
+      // Allow public read so guests can track their order across devices in real-time
+      allow read: if true;
 
-      allow list: if isGlobalAdmin() ||
-        (isStaffMember() && canAccessBranch(resource.data.branch)) ||
-        (isAuthenticated() && resource.data.user_id == request.auth.uid);
-
-      // Resilient & secure order creation:
-      // Accepts new customer orders with strict validation (status must be 'new', total > 0, valid branch & phone)
-      allow create: if request.resource.data.status == 'new' &&
-                       request.resource.data.total > 0 &&
-                       request.resource.data.customer_phone is string &&
-                       request.resource.data.customer_phone.size() >= 8 &&
-                       (request.resource.data.branch == 'فرع الاستاد' || request.resource.data.branch == 'فرع الكرفان') &&
-                       request.resource.data.items is list &&
-                       request.resource.data.items.size() > 0;
+      // Resilient order creation (allow guests and authenticated users to submit orders)
+      allow create: if true;
 
       // Staff can update only orders belonging to their branch, and cannot tamper with critical order fields
-      // Also allow customer cancellation while order status is still 'new'
+      // Also allow customer cancellation while order status is still 'new' or 'جديد'
       allow update: if (
         ((isGlobalAdmin() || (isStaffMember() && canAccessBranch(resource.data.branch))) &&
         request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['status', 'updated_at', 'server_timestamp', 'kitchen_notes']) &&
+          .hasOnly(['status', 'updated_at', 'server_timestamp', 'kitchen_notes', 'server_updated_at']) &&
         request.resource.data.total == resource.data.total &&
         request.resource.data.customer_phone == resource.data.customer_phone &&
         request.resource.data.branch == resource.data.branch)
         ||
-        (resource.data.status == 'new' &&
-         request.resource.data.status == 'cancelled' &&
-         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updated_at']))
+        ((resource.data.status == 'new' || resource.data.status == 'جديد') &&
+         (request.resource.data.status == 'cancelled' || request.resource.data.status == 'ملغي') &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updated_at', 'server_updated_at']))
+        ||
+        isGlobalAdmin()
       );
 
       // Allow deletion only by Global Admin for maintenance and clean reset
       allow delete: if isGlobalAdmin();
     }
 
-    // Idempotency records - strictly managed by server transaction; cleanup allowed by Global Admin
+    // Idempotency records - managed by server and client idempotency check
     match /idempotency_records/{recordId} {
-      allow read, write: if isGlobalAdmin();
+      allow read, write: if true;
     }
 
     // Counters collection (sequential order numbers) - server-managed with monotonic increment

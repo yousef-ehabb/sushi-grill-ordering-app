@@ -773,7 +773,11 @@ export const useStore = create<AppState>()(
           set((state) => {
             const updated = [newOrder, ...state.orders.filter((o) => o.id !== result.orderId)];
             saveOrdersToCache(updated);
-            return { orders: updated, loading: false };
+            return {
+              orders: updated,
+              activeOrder: { id: result.orderId, status: 'new' },
+              loading: false,
+            };
           });
 
           broadcastSyncEvent({

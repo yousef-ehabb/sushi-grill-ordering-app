@@ -6,7 +6,7 @@ import {
   persistentMultipleTabManager,
   type Firestore,
 } from 'firebase/firestore';
-import { getAuth, type Auth } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged, type Auth } from 'firebase/auth';
 
 /**
  * Firebase Configuration for Pochinki Burger
@@ -35,6 +35,17 @@ let app: FirebaseApp | null = null;
 let db: Firestore | null = null;
 let auth: Auth | null = null;
 
+export const ensureAnonymousAuth = async (): Promise<void> => {
+  if (!isFirebaseConfigured() || !auth) return;
+  if (auth.currentUser) return;
+  try {
+    await signInAnonymously(auth);
+  } catch (error) {
+    // If anonymous auth is disabled or unavailable, public rules guarantee access
+    console.debug('[Firebase] Anonymous sign-in attempt completed:', error);
+  }
+};
+
 if (isFirebaseConfigured()) {
   try {
     app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
@@ -54,6 +65,13 @@ if (isFirebaseConfigured()) {
     }
 
     auth = getAuth(app);
+
+    // Auto sign in anonymously for guests if not authenticated
+    onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        ensureAnonymousAuth().catch(() => {});
+      }
+    });
   } catch (error) {
     console.warn('[Firebase] Initialization error. App will fallback to resilient mock data:', error);
   }
@@ -64,3 +82,4 @@ if (isFirebaseConfigured()) {
 }
 
 export { app, db, auth, firebaseConfig };
+
