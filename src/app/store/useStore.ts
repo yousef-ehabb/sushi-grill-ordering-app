@@ -30,6 +30,8 @@ import {
   createOptionGroupsForProduct,
 } from '../../data/mockData';
 
+const recentStoreSubmissions = new Map<string, { result: { orderId: string; orderNumber: number }; timestamp: number }>();
+
 export type Category = {
   id: string;
   name_ar: string;
@@ -516,6 +518,21 @@ export const useStore = create<AppState>()(
       // ── Order Submission ───────────────────────────────────
 
       submitOrder: async (orderData) => {
+        // Concurrency guard: reject duplicate parallel executions if submission is already in progress
+        if (get().loading) {
+          console.warn('[Store] Duplicate submitOrder call blocked: submission is already in progress');
+          return null;
+        }
+
+        const idempotencyKey = orderData.idempotency_key || `idemp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
+        // Check recent submission cache (10s window)
+        const cachedSub = recentStoreSubmissions.get(idempotencyKey);
+        if (cachedSub && (Date.now() - cachedSub.timestamp < 10000)) {
+          console.warn('[Store] Duplicate submission intercepted by idempotency guard in store. Returning order #', cachedSub.result.orderNumber);
+          return cachedSub.result;
+        }
+
         set({ loading: true, error: null });
 
         try {
@@ -580,8 +597,6 @@ export const useStore = create<AppState>()(
             return null;
           }
 
-          const idempotencyKey = orderData.idempotency_key || `idemp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-
           const result = await ordersService.createOrder({
             customer_name: orderData.customer_name,
             customer_phone: orderData.customer_phone,
@@ -603,6 +618,11 @@ export const useStore = create<AppState>()(
               selected_option_ids: item.selectedOptionIds,
               special_instructions: item.specialInstructions,
             })),
+          });
+
+          recentStoreSubmissions.set(idempotencyKey, {
+            result,
+            timestamp: Date.now(),
           });
 
           // Optimistically update orders in store with new order so admin/user sees it instantly

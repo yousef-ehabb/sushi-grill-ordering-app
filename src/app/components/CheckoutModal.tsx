@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { X, CheckCircle2, Truck, Store, MapPin, Phone, User, Loader2, ArrowLeft, UserCheck, AlertTriangle, Printer, Copy, Check } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { useAuthStore } from '../store/useAuthStore';
@@ -46,6 +46,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
     address: '',
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const isSubmittingRef = useRef(false);
+  const lastSubmitTimeRef = useRef(0);
   const [idempotencyKey, setIdempotencyKey] = useState<string>('');
   const [createdOrderId, setCreatedOrderId] = useState<string | null>(null);
   const [createdOrderNumber, setCreatedOrderNumber] = useState<number | null>(null);
@@ -111,12 +113,16 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
   useEffect(() => {
     if (isOpen) {
       setIdempotencyKey(`idemp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`);
+      isSubmittingRef.current = false;
+      lastSubmitTimeRef.current = 0;
     } else {
       setStep(1);
       setFormData({ name: '', phone: '', address: '' });
       setSelectedBranch('');
       setIdempotencyKey('');
       setIsSubmitting(false);
+      isSubmittingRef.current = false;
+      lastSubmitTimeRef.current = 0;
       setCreatedOrderId(null);
       setCreatedOrderNumber(null);
       setReceiptData(null);
@@ -137,7 +143,17 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSubmitting || loading) return;
+
+    // 0ms Synchronous Double-Click / Concurrency Guard
+    const now = Date.now();
+    if (isSubmittingRef.current || isSubmitting || loading) {
+      console.warn('[CheckoutModal] Double-click prevented by synchronous lock');
+      return;
+    }
+    if (now - lastSubmitTimeRef.current < 4000) {
+      console.warn('[CheckoutModal] Double-click prevented by 4s debounce lock');
+      return;
+    }
 
     if (isSubmitDisabled || !isValidPhone || !isBranchValid || !isSelectedBranchOpen || hasBranchUnavailableItems) {
       if (!isBranchValid) {
@@ -159,7 +175,11 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
       return;
     }
 
+    // Immediately lock synchronously BEFORE any async action or state queue
+    isSubmittingRef.current = true;
+    lastSubmitTimeRef.current = now;
     setIsSubmitting(true);
+
     try {
       const activeKey = idempotencyKey || `idemp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
@@ -238,6 +258,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
       });
     } finally {
       setIsSubmitting(false);
+      isSubmittingRef.current = false;
     }
   };
 
@@ -523,14 +544,20 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
                     form="checkout-form"
                     type="submit"
                     disabled={isSubmitDisabled}
+                    onClick={(e) => {
+                      if (isSubmittingRef.current || isSubmitting || loading) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }
+                    }}
                     className={clsx(
                       "w-full py-3.5 sm:py-4 rounded-xl font-bold text-base sm:text-lg transition-all active:scale-[0.98] flex items-center justify-center gap-2",
                       isSubmitDisabled
-                        ? "bg-slate-200 text-slate-400 cursor-not-allowed shadow-none"
+                        ? "bg-slate-200 text-slate-400 cursor-not-allowed shadow-none pointer-events-none"
                         : "bg-primary text-white hover:bg-red-700 shadow-xl shadow-red-500/20 cursor-pointer"
                     )}
                   >
-                    {loading ? (
+                    {loading || isSubmitting ? (
                       <>
                         <Loader2 className="w-5 h-5 animate-spin" />
                         <span>جاري التحقق والإرسال...</span>

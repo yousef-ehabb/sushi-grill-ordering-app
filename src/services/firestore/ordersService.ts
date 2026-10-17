@@ -13,10 +13,12 @@ import {
   serverTimestamp,
   writeBatch,
   deleteDoc,
+  runTransaction,
   type Unsubscribe,
 } from 'firebase/firestore';
 import { auth, db, isFirebaseConfigured } from '../../lib/firebase';
 import type { Order, OrderStatus } from '../../app/store/useStore';
+import { broadcastSyncEvent } from '../../app/utils/realtimeSync';
 
 const ORDERS_COLLECTION = 'orders';
 const ORDERS_STORAGE_KEY = 'pochinki_orders_cache';
@@ -158,10 +160,21 @@ function sanitizeForFirestore<T extends Record<string, any>>(obj: T): T {
   return result;
 }
 
+// In-memory idempotency deduplication caches to eliminate duplicate order submissions
+interface CachedIdempotencyOrder {
+  orderId: string;
+  orderNumber: number;
+  customerPhone: string;
+  branch: string;
+  total: number;
+  timestamp: number;
+}
+const recentOrdersMap = new Map<string, CachedIdempotencyOrder>();
+const inFlightOrderPromises = new Map<string, Promise<{ orderId: string; orderNumber: number }>>();
+
 export const ordersService = {
   /**
-   * Direct Firestore creation fallback for local development (npm run dev)
-   * Activated only when the Vercel Serverless API (/api/orders/create) is not running locally.
+   * Direct Firestore creation with atomic transaction and idempotency protection
    */
   async createOrderDirectFallback(
     orderData: Omit<Order, 'id' | 'created_at'> & {
@@ -171,98 +184,231 @@ export const ordersService = {
       delivery_fee?: number;
     }
   ): Promise<{ orderId: string; orderNumber: number }> {
+    const rawKey = orderData.idempotency_key?.trim();
+
+    // 1. In-flight deduplication: collapse concurrent duplicate calls with identical key
+    if (rawKey && inFlightOrderPromises.has(rawKey)) {
+      console.warn('[OrdersService] In-flight deduplication intercepted parallel submission for key:', rawKey);
+      return await inFlightOrderPromises.get(rawKey)!;
+    }
+
+    // 2. Memory cache check (within 60 seconds)
+    if (rawKey && recentOrdersMap.has(rawKey)) {
+      const cached = recentOrdersMap.get(rawKey)!;
+      if (Date.now() - cached.timestamp < 60000) {
+        console.warn('[OrdersService] Idempotency cache hit, returning existing order #', cached.orderNumber);
+        return { orderId: cached.orderId, orderNumber: cached.orderNumber };
+      }
+    }
+
+    // 3. Local storage recent orders check (same phone, branch, total within 8 seconds)
+    const stored = getStoredOrders();
+    const cleanPhone = orderData.customer_phone?.trim() || '';
+    const cleanBranch = (orderData.branch?.trim() === 'فرع الكرفان') ? 'فرع الكرفان' : 'فرع الاستاد';
+    const subtotal = Number(orderData.subtotal) || Number(orderData.total) || 1;
+    const deliveryFee = Number(orderData.delivery_fee) || 0;
+    const total = Number(orderData.total) || (subtotal + deliveryFee);
+
+    const existingRecentOrder = stored.find((o: any) => {
+      if (rawKey && o.idempotency_key === rawKey) return true;
+      const samePhone = o.customer_phone && o.customer_phone.trim() === cleanPhone;
+      const sameBranch = o.branch && o.branch === cleanBranch;
+      const sameTotal = Math.abs((Number(o.total) || 0) - total) < 0.01;
+      const isWithinWindow = o.created_at && (Date.now() - new Date(o.created_at).getTime() < 8000);
+      return samePhone && sameBranch && sameTotal && isWithinWindow;
+    });
+
+    if (existingRecentOrder && existingRecentOrder.order_number) {
+      console.warn('[OrdersService] Detected duplicate order in local cache within 8s window. Returning order #', existingRecentOrder.order_number);
+      const matched = {
+        orderId: existingRecentOrder.id,
+        orderNumber: existingRecentOrder.order_number,
+      };
+      if (rawKey) {
+        recentOrdersMap.set(rawKey, {
+          ...matched,
+          customerPhone: cleanPhone,
+          branch: cleanBranch,
+          total,
+          timestamp: Date.now(),
+        });
+      }
+      return matched;
+    }
+
     if (!isFirebaseConfigured() || !db) {
       const mockId = 'ord_' + Math.random().toString(36).substring(2, 9);
+      const mockOrderNumber = 1000 + Math.floor((Date.now() / 1000) % 9000);
       console.info('[Mock] Order created locally:', mockId);
-      return { orderId: mockId, orderNumber: 1001 };
+      const mockRes = { orderId: mockId, orderNumber: mockOrderNumber };
+      if (rawKey) {
+        recentOrdersMap.set(rawKey, {
+          ...mockRes,
+          customerPhone: cleanPhone,
+          branch: cleanBranch,
+          total,
+          timestamp: Date.now(),
+        });
+      }
+      return mockRes;
     }
 
-    try {
-      const ordersRef = collection(db, ORDERS_COLLECTION);
-      const newOrderDoc = doc(ordersRef);
-
-      let orderNumber = 1001;
+    // 4. Firestore Query Check for matching idempotency_key
+    if (rawKey) {
       try {
-        const counterRef = doc(db, 'counters', 'order_counter');
-        const counterSnap = await getDoc(counterRef);
-        if (counterSnap.exists()) {
-          const current = counterSnap.data()?.current_number;
-          if (typeof current === 'number') {
-            orderNumber = current + 1;
-          }
+        const idempQuery = query(
+          collection(db, ORDERS_COLLECTION),
+          where('idempotency_key', '==', rawKey),
+          limit(1)
+        );
+        const existingSnap = await getDocs(idempQuery);
+        if (!existingSnap.empty && existingSnap.docs[0]) {
+          const docData = existingSnap.docs[0].data();
+          const docOrderNumber = docData.order_number || 1001;
+          console.warn('[OrdersService] Existing order found in Firestore by idempotency_key:', docOrderNumber);
+          const found = { orderId: existingSnap.docs[0].id, orderNumber: docOrderNumber };
+          recentOrdersMap.set(rawKey, {
+            ...found,
+            customerPhone: cleanPhone,
+            branch: cleanBranch,
+            total,
+            timestamp: Date.now(),
+          });
+          return found;
         }
-        await setDoc(counterRef, { current_number: orderNumber, updated_at: serverTimestamp() }, { merge: true });
-      } catch (counterErr) {
-        console.warn('[OrdersService] Counter update in fallback had non-blocking error:', counterErr);
-        if (orderNumber === 1001) {
-          orderNumber = 1000 + Math.floor((Date.now() / 1000) % 9000);
+      } catch (queryErr) {
+        console.warn('[OrdersService] Idempotency pre-query warning (continuing):', queryErr);
+      }
+    }
+
+    // Wrap execution in an in-flight promise to guard concurrent double calls
+    const executionPromise = (async () => {
+      try {
+        const ordersRef = collection(db, ORDERS_COLLECTION);
+        const newOrderDoc = doc(ordersRef);
+        const counterRef = doc(db, 'counters', 'order_counter');
+
+        const items = (orderData.items || []).map((item: any) => ({
+          id: item.id || 'item_' + Math.random().toString(36).substring(2, 7),
+          product_id: item.product_id || item.id || '',
+          name_ar: item.name_ar || '',
+          quantity: Number(item.quantity) || 1,
+          unit_price: Number(item.unit_price ?? item.price) || 0,
+          selected_option_ids: Array.isArray(item.selected_option_ids)
+            ? item.selected_option_ids
+            : (Array.isArray(item.selectedOptionIds) ? item.selectedOptionIds : []),
+          special_instructions: item.special_instructions || item.specialInstructions || '',
+        }));
+
+        const orderPayload: Record<string, any> = {
+          id: newOrderDoc.id,
+          order_number: 1001,
+          customer_name: orderData.customer_name?.trim() || 'عميل بوشنكي',
+          customer_phone: cleanPhone || '01000000000',
+          address: orderData.address?.trim() || '',
+          user_id: orderData.user_id || null,
+          type: orderData.type || 'pickup',
+          branch: cleanBranch,
+          total,
+          subtotal,
+          delivery_fee: deliveryFee,
+          status: 'new' as OrderStatus,
+          idempotency_key: rawKey || null,
+          created_at: new Date().toISOString(),
+          server_timestamp: serverTimestamp(),
+          items: items.length > 0 ? items : [{
+            id: 'item_default',
+            product_id: 'default',
+            name_ar: 'وجبة بوشنكي',
+            quantity: 1,
+            unit_price: total,
+            selected_option_ids: [],
+            special_instructions: '',
+          }],
+        };
+
+        // Execute atomic allocation of order number + document save
+        let allocatedNumber = 1001;
+        try {
+          allocatedNumber = await runTransaction(db, async (transaction) => {
+            const counterSnap = await transaction.get(counterRef);
+            let nextNum = 1001;
+            if (counterSnap.exists()) {
+              const current = counterSnap.data()?.current_number;
+              if (typeof current === 'number') {
+                nextNum = current + 1;
+              }
+            }
+            transaction.set(counterRef, { current_number: nextNum, updated_at: serverTimestamp() }, { merge: true });
+            orderPayload.order_number = nextNum;
+            transaction.set(newOrderDoc, orderPayload);
+            return nextNum;
+          });
+        } catch (txErr) {
+          console.warn('[OrdersService] Atomic transaction failed, falling back to direct write:', txErr);
+          try {
+            const counterSnap = await getDoc(counterRef);
+            if (counterSnap.exists()) {
+              const current = counterSnap.data()?.current_number;
+              if (typeof current === 'number') {
+                allocatedNumber = current + 1;
+              }
+            }
+            await setDoc(counterRef, { current_number: allocatedNumber, updated_at: serverTimestamp() }, { merge: true });
+          } catch {
+            allocatedNumber = 1000 + Math.floor((Date.now() / 1000) % 9000);
+          }
+          orderPayload.order_number = allocatedNumber;
+          await setDoc(newOrderDoc, orderPayload);
+        }
+
+        orderPayload.order_number = allocatedNumber;
+        saveSingleOrderToCache(orderPayload as Order);
+
+        if (rawKey) {
+          recentOrdersMap.set(rawKey, {
+            orderId: newOrderDoc.id,
+            orderNumber: allocatedNumber,
+            customerPhone: cleanPhone,
+            branch: cleanBranch,
+            total,
+            timestamp: Date.now(),
+          });
+        }
+
+        // Safe non-blocking cross-tab broadcast
+        try {
+          broadcastSyncEvent({
+            type: 'ORDER_CREATED',
+            orderId: newOrderDoc.id,
+            branch: cleanBranch,
+          });
+        } catch (syncErr) {
+          console.warn('[OrdersService] Cross-tab broadcast warning (non-blocking):', syncErr);
+        }
+
+        console.info('[OrdersService] Order created cleanly in Firestore:', newOrderDoc.id, 'Number:', allocatedNumber);
+        return { orderId: newOrderDoc.id, orderNumber: allocatedNumber };
+      } finally {
+        if (rawKey) {
+          inFlightOrderPromises.delete(rawKey);
         }
       }
+    })();
 
-      const items = (orderData.items || []).map((item: any) => ({
-        id: item.id || 'item_' + Math.random().toString(36).substring(2, 7),
-        product_id: item.product_id || item.id || '',
-        name_ar: item.name_ar || '',
-        quantity: Number(item.quantity) || 1,
-        unit_price: Number(item.unit_price ?? item.price) || 0,
-        selected_option_ids: Array.isArray(item.selected_option_ids)
-          ? item.selected_option_ids
-          : (Array.isArray(item.selectedOptionIds) ? item.selectedOptionIds : []),
-        special_instructions: item.special_instructions || item.specialInstructions || '',
-      }));
-
-      // Ensure branch is valid according to security rules
-      const validBranch = (orderData.branch?.trim() === 'فرع الكرفان') ? 'فرع الكرفان' : 'فرع الاستاد';
-      const subtotal = Number(orderData.subtotal) || Number(orderData.total) || 1;
-      const deliveryFee = Number(orderData.delivery_fee) || 0;
-      const total = Number(orderData.total) || (subtotal + deliveryFee);
-
-      const orderPayload: Record<string, any> = {
-        id: newOrderDoc.id,
-        order_number: orderNumber,
-        customer_name: orderData.customer_name?.trim() || 'عميل بوشنكي',
-        customer_phone: orderData.customer_phone?.trim() || '01000000000',
-        address: orderData.address?.trim() || '',
-        user_id: orderData.user_id || null,
-        type: orderData.type || 'pickup',
-        branch: validBranch,
-        total,
-        subtotal,
-        delivery_fee: deliveryFee,
-        status: 'new' as OrderStatus,
-        created_at: new Date().toISOString(),
-        server_timestamp: serverTimestamp(),
-        items: items.length > 0 ? items : [{
-          id: 'item_default',
-          product_id: 'default',
-          name_ar: 'وجبة بوشنكي',
-          quantity: 1,
-          unit_price: total,
-          selected_option_ids: [],
-          special_instructions: '',
-        }],
-      };
-
-      await setDoc(newOrderDoc, orderPayload);
-      saveSingleOrderToCache(orderPayload as Order);
-      broadcastSyncEvent({
-        type: 'ORDER_CREATED',
-        orderId: newOrderDoc.id,
-        branch: validBranch,
-      });
-      console.info('[OrdersService] Order created directly in Firestore:', newOrderDoc.id, 'Number:', orderNumber);
-      return { orderId: newOrderDoc.id, orderNumber };
-    } catch (error) {
-      console.error('[OrdersService] Direct fallback creation failed:', error);
-      throw error;
+    if (rawKey) {
+      inFlightOrderPromises.set(rawKey, executionPromise);
     }
+
+    return await executionPromise;
   },
 
   /**
-   * Create a new order:
-   * 1. Direct client-side Firestore primary save + localStorage cache ensuring 100% identical, reliable behavior on Localhost and Vercel.
-   * 2. Public guest checkout: Decoupled from any admin auth headers.
-   * 3. Bulletproof fallback: If direct Firestore encounters any network glitch, attempts serverless route and catches any API error gracefully.
+   * Create a new order with STRICT SINGLE SOURCE OF TRUTH:
+   * 1. Primary save directly to client Firestore.
+   * 2. If Firestore saves the document, it will NEVER call /api/orders/create.
+   * 3. Only if client Firestore encounters a critical pre-write connection failure,
+   *    does it engage the serverless fallback, passing the exact same idempotency_key.
    */
   async createOrder(
     orderData: Omit<Order, 'id' | 'created_at'> & {
@@ -293,15 +439,22 @@ export const ordersService = {
       return { orderId: mockId, orderNumber: mockOrderNumber };
     }
 
-    // PRIMARY SAVE: Direct client-side Firebase Firestore (collection(db, 'orders')) and localStorage.
-    // Behaves identically on both Localhost and Vercel Production. No cold starts, no session validation rejections.
+    // PRIMARY SAVE: Direct client-side Firebase Firestore
     try {
       const directResult = await this.createOrderDirectFallback(orderData);
+      // SUCCESS: The order document is already created in Firestore! Return immediately!
       return directResult;
     } catch (directErr) {
-      console.warn('[OrdersService] Direct Firestore save failed, engaging serverless API route fallback:', directErr);
+      console.warn('[OrdersService] Direct Firestore save failed before writing document, evaluating fallback:', directErr);
 
-      // SECONDARY FALLBACK: Call serverless /api/orders/create (strictly without Authorization header)
+      // Check if an order with this idempotency key was actually created
+      const rawKey = orderData.idempotency_key?.trim();
+      if (rawKey && recentOrdersMap.has(rawKey)) {
+        const cached = recentOrdersMap.get(rawKey)!;
+        return { orderId: cached.orderId, orderNumber: cached.orderNumber };
+      }
+
+      // SECONDARY FALLBACK: Only if direct Firestore was blocked before saving document
       try {
         const rawCartItems = (orderData.raw_items && orderData.raw_items.length > 0)
           ? orderData.raw_items
@@ -326,7 +479,6 @@ export const ordersService = {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            // Decoupled from Admin Auth: NEVER send admin authorization header for customer orders
           },
           body: JSON.stringify({
             customer_name: orderData.customer_name,
@@ -366,14 +518,12 @@ export const ordersService = {
           return apiResult;
         }
 
-        // If the server API returned an error (401, 403, 404, 500, etc.),
-        // catch and ignore the API error gracefully instead of throwing it!
         console.warn(`[OrdersService] Serverless route returned error status ${response.status}:`, data);
       } catch (apiErr) {
         console.warn('[OrdersService] Serverless route network error:', apiErr);
       }
 
-      // FINAL BULLETPROOF SAFETY NET: create local order record so customer receipt always displays!
+      // FINAL SAFETY NET: create local order record so customer receipt always displays!
       const fallbackLocalId = 'ord_' + Math.random().toString(36).substring(2, 9);
       const fallbackLocalNumber = 1000 + Math.floor((Date.now() / 1000) % 9000);
       saveSingleOrderToCache({
