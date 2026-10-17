@@ -9,6 +9,7 @@ import {
   getStoredOrders,
   mergeOrders,
   saveOrdersToCache,
+  clearOrdersCache,
 } from '../../services/firestore';
 import { ProductEditModal } from './ProductEditModal';
 import {
@@ -47,7 +48,14 @@ import {
   Store,
   Maximize2,
   Minimize2,
-  Printer
+  Printer,
+  Database,
+  ShieldAlert,
+  CheckCircle2,
+  RotateCcw,
+  Key,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { resolveAllOptionNames } from '../utils/optionNames';
 import { getDisplayOrderId, isCancellable } from '../utils/orderUtils';
@@ -180,8 +188,14 @@ export const AdminView: React.FC = () => {
   const [newSauceInputs, setNewSauceInputs] = useState<Record<string, { name: string; price: number }>>({});
   const [editingSauceId, setEditingSauceId] = useState<string | null>(null);
   const [editSauceName, setEditSauceName] = useState('');
-  const [editSaucePrice, setEditSaucePrice] = useState(0);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Database Fresh Reset / Clean Slate state (Super Admin only)
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [resetPasswordInput, setResetPasswordInput] = useState('');
+  const [showResetPassword, setShowResetPassword] = useState(false);
+  const [isResettingDb, setIsResettingDb] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
 
   useEffect(() => {
     const loadData = async () => {
@@ -202,13 +216,8 @@ export const AdminView: React.FC = () => {
     // Subscribe to real-time updates (orders, products, settings)
     const unsubscribeOrders = ordersService.subscribeToAllOrders(
       (liveOrders) => {
-        if (liveOrders && liveOrders.length > 0) {
-          useStore.setState((state) => {
-            const merged = mergeOrders(state.orders, liveOrders);
-            saveOrdersToCache(merged);
-            return { orders: merged };
-          });
-        }
+        useStore.setState({ orders: liveOrders || [] });
+        saveOrdersToCache(liveOrders || []);
       },
       adminBranchScope,
       (err) => {
@@ -573,6 +582,39 @@ export const AdminView: React.FC = () => {
       toast.error('حدث خطأ أثناء الحفظ');
     }
     setIsSaving(false);
+  };
+
+  const handleExecuteReset = async () => {
+    if (resetPasswordInput !== 'Pochinki@2026!') {
+      setResetError('كلمة مرور الإدارة العامة غير صحيحة');
+      return;
+    }
+
+    setIsResettingDb(true);
+    setResetError(null);
+
+    try {
+      const result = await ordersService.resetTransactionalData();
+      useStore.getState().resetOrdersState();
+      setShowResetModal(false);
+      setResetPasswordInput('');
+      toast.success(
+        `تمت تهيئة قاعدة البيانات بنجاح! تم مسح ${result.deletedCount} طلب، وقائمة الطلبات والمبيعات الآن 0 جاهزة تماماً للعرض.`,
+        { duration: 5000 }
+      );
+    } catch (err: any) {
+      console.error('Database reset failed:', err);
+      setResetError('حدث خطأ أثناء مسح قاعدة البيانات. يرجى التأكد من الاتصال والمحاولة ثانية.');
+      toast.error('تعذر إتمام عملية التهيئة بالكامل');
+    } finally {
+      setIsResettingDb(false);
+    }
+  };
+
+  const handleClearDemoCacheOnly = () => {
+    clearOrdersCache();
+    useStore.getState().resetOrdersState();
+    toast.success('تم مسح ذاكرة التخزين المؤقت للمتصفح بنجاح');
   };
 
   const statusColors: Record<OrderStatus, string> = {
@@ -1603,6 +1645,92 @@ export const AdminView: React.FC = () => {
                     حفظ جميع الإعدادات
                   </button>
                 </div>
+
+                {/* ── Section 4: Super Admin Database Clean Slate (Safe Reset) ── */}
+                {(adminRole === 'admin' || adminBranchScope === 'all') && (
+                  <div className="bg-gradient-to-br from-red-50/60 via-white to-amber-50/40 rounded-2xl p-6 md:p-8 border-2 border-red-200/80 shadow-sm space-y-6">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-red-100 pb-5">
+                      <div className="flex items-start sm:items-center gap-3.5">
+                        <div className="w-11 h-11 rounded-xl bg-red-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-red-600/20">
+                          <Database className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-xl font-black text-slate-900">
+                              تهيئة قاعدة البيانات وبدء تشغيل نظيف
+                            </h3>
+                            <span className="bg-red-100 text-red-700 text-[11px] font-black px-2.5 py-0.5 rounded-full border border-red-200">
+                              Super Admin فقط
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-600 mt-1">
+                            مخصصة لتهيئة النظام وعرض الموقع لصاحب المطعم أو بدء يوم عمل جديد بـ 0 طلبات ومبيعات مصفّرة.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 self-start sm:self-auto">
+                        <button
+                          type="button"
+                          onClick={handleClearDemoCacheOnly}
+                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 transition-all shadow-xs cursor-pointer active:scale-95"
+                          title="مسح ذاكرة التخزين المؤقت للمتصفح دون مسح قاعدة البيانات"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
+                          مسح كاش المتصفح فقط
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* What is kept vs what is reset badges */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="p-4 rounded-xl bg-emerald-50/70 border border-emerald-200/70 space-y-2">
+                        <div className="flex items-center gap-2 font-bold text-emerald-800 text-xs">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>البيانات المحفوظة بأمان (لن تُحذف):</span>
+                        </div>
+                        <ul className="text-xs text-emerald-950/80 space-y-1 list-disc list-inside pr-1">
+                          <li>قائمة المنيو والبرجر والأسعار والصور كاملة</li>
+                          <li>جميع الصوصات والإضافات والترقيات المسجلة</li>
+                          <li>حسابات الإدارة الثلاثة (admin, stadium_admin, caravan_admin)</li>
+                          <li>إعدادات الفروع ومواعيد العمل وحالة المطعم</li>
+                        </ul>
+                      </div>
+
+                      <div className="p-4 rounded-xl bg-red-50/70 border border-red-200/70 space-y-2">
+                        <div className="flex items-center gap-2 font-bold text-red-800 text-xs">
+                          <Trash2 className="w-4 h-4 text-red-600 shrink-0" />
+                          <span>البيانات التي سيتم تصفيرها بالكامل:</span>
+                        </div>
+                        <ul className="text-xs text-red-950/80 space-y-1 list-disc list-inside pr-1">
+                          <li>حذف كافة الطلبات السابقة والتجريبية نهائياً (0 طلبات)</li>
+                          <li>تصفير مبيعات اليوم والشهر وقائمة الأصناف الأكثر طلباً</li>
+                          <li>إعادة ترقيم الطلبات لتبدأ من جديد بالرقم #1001</li>
+                          <li>تفريغ الذاكرة المؤقتة للأجهزة والمتصفحات المرتبطة</li>
+                        </ul>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2">
+                      <p className="text-xs text-slate-500 flex items-center gap-1.5">
+                        <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0" />
+                        يتطلب هذا الإجراء تأكيد كلمة مرور المدير العام Super Admin لحماية البيانات.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setResetError(null);
+                          setResetPasswordInput('');
+                          setShowResetModal(true);
+                        }}
+                        className="flex items-center justify-center gap-2 px-5 py-3 rounded-xl font-black text-xs text-white bg-red-600 hover:bg-red-700 active:scale-95 transition-all shadow-md shadow-red-600/25 cursor-pointer shrink-0"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        بدء تشغيل نظيف وتصفير الطلبات
+                      </button>
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -2247,6 +2375,128 @@ export const AdminView: React.FC = () => {
           </>
         )}
       </AnimatePresence>
+
+      {/* ── Super Admin Database Clean Slate Confirmation Modal ── */}
+      <AnimatePresence>
+        {showResetModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+              onClick={() => !isResettingDb && setShowResetModal(false)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="relative w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-red-100 overflow-hidden z-10"
+              dir="rtl"
+            >
+              {/* Modal Header */}
+              <div className="bg-gradient-to-r from-red-600 to-red-700 text-white p-6 pb-5 flex items-start justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center text-white">
+                    <ShieldAlert className="w-6 h-6 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-black leading-tight">تأكيد تهيئة وبدء تشغيل نظيف</h3>
+                    <p className="text-xs text-red-100 mt-0.5">عملية إدارية خاصة بالمدير العام فقط (Super Admin)</p>
+                  </div>
+                </div>
+                {!isResettingDb && (
+                  <button
+                    onClick={() => setShowResetModal(false)}
+                    className="p-1 rounded-lg text-white/80 hover:text-white hover:bg-white/10 transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Modal Body */}
+              <div className="p-6 space-y-4">
+                <div className="p-4 rounded-2xl bg-red-50 border border-red-200/80 text-xs text-red-900 space-y-2">
+                  <p className="font-bold flex items-center gap-1.5 text-red-700">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    تنبيه أمان هام قبل المتابعة:
+                  </p>
+                  <p className="leading-relaxed">
+                    سيتم حذف <strong>جميع الطلبات الحالية</strong> من قاعدة البيانات بالكامل وتصفير إحصائيات المبيعات، وإعادة عداد الطلبات ليبدأ من <strong>#1001</strong>.
+                  </p>
+                  <p className="leading-relaxed text-emerald-700 font-semibold">
+                    ✓ الأصناف، الصوصات، حسابات الإدارة وإعدادات الفروع ستبقى آمنة ومحفوظة تماماً.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block text-xs font-bold text-slate-700">
+                    أدخل كلمة مرور المدير العام (Super Admin) للتأكيد:
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showResetPassword ? 'text' : 'password'}
+                      value={resetPasswordInput}
+                      onChange={(e) => {
+                        setResetPasswordInput(e.target.value);
+                        setResetError(null);
+                      }}
+                      disabled={isResettingDb}
+                      placeholder="كلمة مرور الإدارة العامة..."
+                      className="w-full px-4 py-3 pl-11 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:ring-2 focus:ring-red-500/20 focus:border-red-500 outline-none transition-all placeholder:text-slate-400"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowResetPassword(!showResetPassword)}
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+                    >
+                      {showResetPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                  {resetError && (
+                    <p className="text-xs font-bold text-red-600 flex items-center gap-1">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                      {resetError}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="p-6 pt-0 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  disabled={isResettingDb}
+                  onClick={() => setShowResetModal(false)}
+                  className="px-5 py-2.5 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="button"
+                  disabled={isResettingDb || !resetPasswordInput.trim()}
+                  onClick={handleExecuteReset}
+                  className="flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs font-black text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md shadow-red-600/25 active:scale-95 cursor-pointer"
+                >
+                  {isResettingDb ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      جاري تصفير قاعدة البيانات...
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-4 h-4" />
+                      تأكيد البدء النظيف
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* ── Floating Notification Sound Widget ── */}
       <NotificationSoundWidget
         isMuted={isNotificationMuted}

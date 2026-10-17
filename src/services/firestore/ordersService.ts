@@ -11,6 +11,8 @@ import {
   limit,
   onSnapshot,
   serverTimestamp,
+  writeBatch,
+  deleteDoc,
   type Unsubscribe,
 } from 'firebase/firestore';
 import { auth, db, isFirebaseConfigured } from '../../lib/firebase';
@@ -36,16 +38,54 @@ export const getStoredOrders = (): Order[] => {
 };
 
 /**
- * Save orders to LocalStorage cache without overwriting with empty array
+ * Save orders to LocalStorage cache (clears cache if empty array is provided)
  */
 export const saveOrdersToCache = (orders: Order[]) => {
   if (typeof window === 'undefined') return;
   try {
     if (orders && orders.length > 0) {
       localStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(orders));
+    } else {
+      localStorage.removeItem(ORDERS_STORAGE_KEY);
     }
   } catch (e) {
     console.warn('[OrdersService] Error saving cached orders to localStorage:', e);
+  }
+};
+
+/**
+ * Safely purge all cached orders and guest tracking from LocalStorage
+ */
+export const clearOrdersCache = () => {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem(ORDERS_STORAGE_KEY);
+    localStorage.removeItem('pochinki_last_order');
+    localStorage.removeItem('pochinki_active_order_id');
+    try {
+      const cartRaw = localStorage.getItem('pochinki-burger-cart');
+      if (cartRaw) {
+        const parsed = JSON.parse(cartRaw);
+        if (parsed?.state) {
+          parsed.state.orders = [];
+          localStorage.setItem('pochinki-burger-cart', JSON.stringify(parsed));
+        }
+      }
+    } catch {
+      // ignore
+    }
+    window.dispatchEvent(new CustomEvent('pochinki_orders_cleared'));
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        const channel = new BroadcastChannel('pochinki_sync_channel');
+        channel.postMessage({ type: 'orders_cleared', timestamp: Date.now() });
+        channel.close();
+      } catch {
+        // ignore channel errors
+      }
+    }
+  } catch (e) {
+    console.warn('[OrdersService] Error clearing orders cache:', e);
   }
 };
 
@@ -398,8 +438,9 @@ export const ordersService = {
 
     try {
       const snapshot = await getDocs(collection(db, ORDERS_COLLECTION));
-      if (snapshot.empty && cached.length > 0) {
-        return cached;
+      if (snapshot.empty) {
+        saveOrdersToCache([]);
+        return [];
       }
 
       const remoteOrders: Order[] = snapshot.docs.map((docSnap) => ({
@@ -410,12 +451,8 @@ export const ordersService = {
       // Sort programmatically on client side (createdAt descending)
       remoteOrders.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
 
-      // Merge with cache to preserve any local orders
-      const merged = mergeOrders(cached, remoteOrders);
-      if (merged.length > 0) {
-        saveOrdersToCache(merged);
-      }
-      return merged;
+      saveOrdersToCache(remoteOrders);
+      return remoteOrders;
     } catch (error) {
       console.error('[Firestore] Error fetching all orders, using local cache:', error);
       return cached;
@@ -657,25 +694,21 @@ export const ordersService = {
 
         remoteOrders.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
 
-        // Merge with existing localStorage cache to avoid wiping out orders
-        const currentCached = getStoredOrders();
-        const merged = mergeOrders(currentCached, remoteOrders);
-        if (merged.length > 0) {
-          saveOrdersToCache(merged);
-          const scoped = (branchScope && branchScope !== 'all')
-            ? merged.filter(o => o.branch === branchScope)
-            : merged;
-          callback(scoped);
-        } else if (snapshot.empty && filteredCached.length > 0) {
-          callback(filteredCached);
-        } else {
+        if (snapshot.empty) {
+          saveOrdersToCache([]);
           callback([]);
+          return;
         }
+
+        saveOrdersToCache(remoteOrders);
+        const scoped = (branchScope && branchScope !== 'all')
+          ? remoteOrders.filter(o => o.branch === branchScope)
+          : remoteOrders;
+        callback(scoped);
       },
       (error) => {
         console.error('[Firestore] Error in subscribeToAllOrders stream transport:', error);
         if (onError) onError(error);
-        // Fallback to cached orders on stream error - NEVER wipe out existing orders
         if (filteredCached.length > 0) {
           callback(filteredCached);
         }
@@ -703,6 +736,78 @@ export const ordersService = {
       });
     } catch (error) {
       console.error(`[Firestore] Error updating order status ${orderId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Fresh Reset / Clean Slate for transactional data:
+   * Safely deletes all orders and idempotency records from Firestore,
+   * resets counters/order_counter back to 1000 (so first order will be #1001),
+   * and clears all client-side cached orders and guest tracking.
+   * Keeps menu, products, categories, options, admins, and operational settings completely intact.
+   */
+  async resetTransactionalData(): Promise<{ success: boolean; deletedCount: number }> {
+    if (!isFirebaseConfigured() || !db) {
+      clearOrdersCache();
+      return { success: true, deletedCount: 0 };
+    }
+
+    try {
+      // 1. Delete all orders from Firestore
+      const ordersSnap = await getDocs(collection(db, ORDERS_COLLECTION));
+      let deletedCount = 0;
+
+      if (!ordersSnap.empty) {
+        let batch = writeBatch(db);
+        let batchCount = 0;
+
+        for (const docSnap of ordersSnap.docs) {
+          batch.delete(docSnap.ref);
+          batchCount++;
+          deletedCount++;
+          if (batchCount === 400) {
+            await batch.commit();
+            batch = writeBatch(db);
+            batchCount = 0;
+          }
+        }
+        if (batchCount > 0) {
+          await batch.commit();
+        }
+      }
+
+      // 2. Clear idempotency records
+      try {
+        const idempSnap = await getDocs(collection(db, 'idempotency_records'));
+        if (!idempSnap.empty) {
+          let idempBatch = writeBatch(db);
+          for (const docSnap of idempSnap.docs) {
+            idempBatch.delete(docSnap.ref);
+          }
+          await idempBatch.commit();
+        }
+      } catch (idempErr) {
+        console.warn('[OrdersService] Non-critical idempotency records cleanup error:', idempErr);
+      }
+
+      // 3. Reset sequential order counter back to 1000 so next order starts at #1001
+      try {
+        const counterRef = doc(db, 'counters', 'order_counter');
+        await setDoc(counterRef, {
+          current_number: 1000,
+          updated_at: serverTimestamp()
+        }, { merge: true });
+      } catch (counterErr) {
+        console.warn('[OrdersService] Non-critical order_counter reset error:', counterErr);
+      }
+
+      // 4. Safely clear all client-side caches and broadcast to all open browser tabs
+      clearOrdersCache();
+
+      return { success: true, deletedCount };
+    } catch (error) {
+      console.error('[OrdersService] Error resetting transactional data:', error);
       throw error;
     }
   },

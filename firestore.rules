@@ -152,13 +152,13 @@ service cloud.firestore {
          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updated_at']))
       );
 
-      // Disallow deletion to preserve audit trails
-      allow delete: if false;
+      // Allow deletion only by Global Admin for maintenance and clean reset
+      allow delete: if isGlobalAdmin();
     }
 
-    // Idempotency records - strictly managed by server transaction
+    // Idempotency records - strictly managed by server transaction; cleanup allowed by Global Admin
     match /idempotency_records/{recordId} {
-      allow read, write: if false;
+      allow read, write: if isGlobalAdmin();
     }
 
     // Counters collection (sequential order numbers) - server-managed with monotonic increment

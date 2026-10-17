@@ -276,6 +276,12 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
             if (!orderSnap.exists()) {
                 setOrder(null);
                 setFetchError('لم يتم العثور على الطلب');
+                try {
+                    localStorage.removeItem('pochinki_last_order');
+                    setLastSavedOrder(null);
+                } catch {
+                    // ignore
+                }
                 return;
             }
 
@@ -324,6 +330,12 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
             if (!guestOrder) {
                 setOrder(null);
                 setFetchError('لم يتم العثور على الطلب. يرجى التأكد من رقم الطلب ورقم الهاتف.');
+                try {
+                    localStorage.removeItem('pochinki_last_order');
+                    setLastSavedOrder(null);
+                } catch {
+                    // ignore
+                }
                 return;
             }
 

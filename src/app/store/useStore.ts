@@ -164,6 +164,7 @@ interface AppState {
   invalidateOptionGroups: (productId: string) => void;
   fetchAllOptionGroups: () => Promise<void>;
   fetchOrders: () => Promise<void>;
+  resetOrdersState: () => void;
   fetchActiveOrder: () => Promise<void>;
   fetchGlobalSettings: () => Promise<void>;
   fetchBusinessRules: () => Promise<void>;
@@ -366,15 +367,20 @@ export const useStore = create<AppState>()(
           }
 
           if (orders && orders.length > 0) {
-            set((state) => {
-              const merged = mergeOrders(state.orders, orders);
-              saveOrdersToCache(merged);
-              return { orders: merged };
-            });
+            set({ orders });
+            saveOrdersToCache(orders);
+          } else {
+            set({ orders: [], activeOrder: null });
+            saveOrdersToCache([]);
           }
         } catch (error) {
           console.error('Failed to fetch orders, retaining cached orders:', error);
         }
+      },
+
+      resetOrdersState: () => {
+        saveOrdersToCache([]);
+        set({ orders: [], activeOrder: null });
       },
 
       fetchActiveOrder: async () => {
@@ -1127,3 +1133,23 @@ export const useStore = create<AppState>()(
     }
   )
 );
+
+// Cross-tab and window listener for clean reset events
+if (typeof window !== 'undefined') {
+  window.addEventListener('pochinki_orders_cleared', () => {
+    useStore.getState().resetOrdersState();
+  });
+  if (typeof BroadcastChannel !== 'undefined') {
+    try {
+      const channel = new BroadcastChannel('pochinki_sync_channel');
+      channel.addEventListener('message', (event) => {
+        if (event.data?.type === 'orders_cleared') {
+          useStore.getState().resetOrdersState();
+        }
+      });
+    } catch {
+      // ignore
+    }
+  }
+}
+
