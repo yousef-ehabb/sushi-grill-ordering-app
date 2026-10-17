@@ -75,13 +75,14 @@ const CustomerLayout: React.FC = () => {
         if (!exists) {
           useStore.setState({ orders: [event.order, ...currentOrders] });
         }
+        fetchOrders();
       } else if (event.type === 'ORDER_STATUS_CHANGED') {
         const currentOrders = useStore.getState().orders;
         useStore.setState({
           orders: currentOrders.map((o) => (o.id === event.orderId ? { ...o, status: event.status } : o)),
         });
+        fetchOrders();
       } else if (event.type === 'ORDER_EVENT_NOTIFICATION') {
-        // Notification-only: trigger authorized re-fetch from Firestore source-of-truth without bypassing security
         fetchOrders();
       } else if (event.type === 'FORCE_REFRESH') {
         fetchProducts();

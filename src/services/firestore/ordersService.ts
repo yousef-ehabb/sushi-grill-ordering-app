@@ -172,7 +172,7 @@ export const ordersService = {
       // Ensure branch is valid according to security rules
       const validBranch = (orderData.branch?.trim() === 'فرع الكرفان') ? 'فرع الكرفان' : 'فرع الاستاد';
 
-      const orderPayload: Record<string, any> = sanitizeForFirestore({
+      const orderPayload: Record<string, any> = {
         id: newOrderDoc.id,
         order_number: orderNumber,
         customer_name: orderData.customer_name?.trim() || 'عميل بوشنكي',
@@ -196,12 +196,10 @@ export const ordersService = {
           selected_option_ids: [],
           special_instructions: '',
         }],
-      });
-
-      // Save directly to LocalStorage cache
-      saveSingleOrderToCache(orderPayload as Order);
+      };
 
       await setDoc(newOrderDoc, orderPayload);
+      saveSingleOrderToCache(orderPayload as Order);
       console.info('[OrdersService] [Resilient Fallback] Order created directly in Firestore:', newOrderDoc.id, 'Number:', orderNumber);
       return { orderId: newOrderDoc.id, orderNumber };
     } catch (error) {
@@ -290,6 +288,9 @@ export const ordersService = {
         details: data?.details,
       });
 
+      // If server returns 500 (e.g. Firebase Admin credentials unconfigured in Vercel),
+      // or if static hosting rewrite returns 200 with HTML (data is null),
+      // seamlessly engage direct Firestore fallback so orders are not blocked.
       if (response.status === 500 || data?.code === 'FIREBASE_CREDENTIALS_MISSING' || !data) {
         console.info('[OrdersService] Engaging direct Firestore fallback due to server error or unconfigured serverless environment.');
         return await this.createOrderDirectFallback(orderData);
@@ -304,7 +305,6 @@ export const ordersService = {
       orderNumber: data.orderNumber || 1001,
     };
 
-    // Save to LocalStorage cache
     saveSingleOrderToCache({
       id: result.orderId,
       order_number: result.orderNumber,
@@ -359,7 +359,6 @@ export const ordersService = {
     }
 
     try {
-      // Query simple collection without compound orderBy to prevent 400 Bad Request & missing index errors
       const snapshot = await getDocs(collection(db, ORDERS_COLLECTION));
       if (snapshot.empty && cached.length > 0) {
         return cached;
@@ -370,8 +369,10 @@ export const ordersService = {
         ...(docSnap.data() as Omit<Order, 'id'>),
       }));
 
+      // Sort programmatically on client side (createdAt descending)
       remoteOrders.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
 
+      // Merge with cache to preserve any local orders
       const merged = mergeOrders(cached, remoteOrders);
       if (merged.length > 0) {
         saveOrdersToCache(merged);
@@ -401,16 +402,15 @@ export const ordersService = {
         id: docSnap.id,
         ...(docSnap.data() as Omit<Order, 'id'>),
       }));
-      orders.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
-      return orders;
+      return orders.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     } catch (error) {
-      console.error(`[Firestore] Error fetching orders for user ${userId}:`, error);
+      console.warn('[Firestore] Error fetching user orders:', error);
       return [];
     }
   },
 
   /**
-   * Fetch a single order by ID
+   * Fetch a single order by ID or order_number
    */
   async getOrderById(orderId: string): Promise<Order | null> {
     const cached = getStoredOrders().find((o) => o.id === orderId);
@@ -420,7 +420,26 @@ export const ordersService = {
     }
 
     try {
-      const docRef = doc(db, ORDERS_COLLECTION, orderId);
+      const cleanLookup = orderId.trim();
+
+      // If lookup is numeric (e.g. "1001"), query by order_number first
+      if (/^\d+$/.test(cleanLookup)) {
+        const numericOrderNum = parseInt(cleanLookup, 10);
+        const q = query(
+          collection(db, ORDERS_COLLECTION),
+          where('order_number', '==', numericOrderNum),
+          limit(1)
+        );
+        const snap = await getDocs(q);
+        if (!snap.empty && snap.docs[0]) {
+          return {
+            id: snap.docs[0].id,
+            ...(snap.docs[0].data() as Omit<Order, 'id'>),
+          };
+        }
+      }
+
+      const docRef = doc(db, ORDERS_COLLECTION, cleanLookup);
       const snap = await getDoc(docRef);
 
       if (!snap.exists()) return cached || null;
@@ -491,6 +510,7 @@ export const ordersService = {
       return () => {};
     }
 
+    // Query simple collection to prevent 400 Bad Request
     const colRef = collection(db, ORDERS_COLLECTION);
 
     return onSnapshot(
@@ -521,13 +541,14 @@ export const ordersService = {
 
   /**
    * Subscribe in real-time to all orders for the Admin Screen (with optional branch scoping)
-   * Simple collection query without compound orderBy to prevent 400 Bad Request & missing index errors
+   * Programmatically sorts in memory to avoid 400 Bad Request / missing compound index errors
    */
   subscribeToAllOrders(
     callback: (orders: Order[]) => void,
     branchScope?: string | null,
     onError?: (error: any) => void
   ): Unsubscribe {
+    // Deliver cached orders immediately
     const initialCached = getStoredOrders();
     const filteredCached = (branchScope && branchScope !== 'all')
       ? initialCached.filter(o => o.branch === branchScope)
@@ -541,7 +562,7 @@ export const ordersService = {
     }
 
     const colRef = collection(db, ORDERS_COLLECTION);
-    const q = (branchScope && branchScope !== 'all')
+    const q = branchScope && branchScope !== 'all'
       ? query(colRef, where('branch', '==', branchScope))
       : colRef;
 
@@ -555,6 +576,7 @@ export const ordersService = {
 
         remoteOrders.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
 
+        // Merge with existing localStorage cache to avoid wiping out orders
         const currentCached = getStoredOrders();
         const merged = mergeOrders(currentCached, remoteOrders);
         if (merged.length > 0) {
@@ -572,6 +594,7 @@ export const ordersService = {
       (error) => {
         console.error('[Firestore] Error in subscribeToAllOrders stream transport:', error);
         if (onError) onError(error);
+        // Fallback to cached orders on stream error - NEVER wipe out existing orders
         if (filteredCached.length > 0) {
           callback(filteredCached);
         }

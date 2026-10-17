@@ -354,18 +354,23 @@ export const useStore = create<AppState>()(
       fetchOrders: async () => {
         try {
           const authUser = auth?.currentUser;
-          const orders = await ordersService.getAllOrders();
+          const isAdmin = typeof window !== 'undefined' && Boolean(localStorage.getItem('pochinki_admin_session'));
+
+          let orders: Order[] = [];
+          if (isAdmin) {
+            orders = await ordersService.getAllOrders();
+          } else if (authUser) {
+            orders = await ordersService.getUserOrders(authUser.uid);
+          } else {
+            orders = await ordersService.getAllOrders();
+          }
+
           if (orders && orders.length > 0) {
             set((state) => {
               const merged = mergeOrders(state.orders, orders);
               saveOrdersToCache(merged);
               return { orders: merged };
             });
-          } else if (authUser) {
-            const userOrders = await ordersService.getUserOrders(authUser.uid);
-            if (userOrders && userOrders.length > 0) {
-              set({ orders: userOrders });
-            }
           }
         } catch (error) {
           console.error('Failed to fetch orders, retaining cached orders:', error);
@@ -375,14 +380,17 @@ export const useStore = create<AppState>()(
       fetchActiveOrder: async () => {
         try {
           const authUser = auth?.currentUser;
+          const isAdmin = typeof window !== 'undefined' && Boolean(localStorage.getItem('pochinki_admin_session'));
+
           let orders = get().orders;
           if (orders.length === 0) {
-            if (authUser) {
-              orders = await ordersService.getUserOrders(authUser.uid);
-            } else {
+            if (isAdmin) {
               orders = await ordersService.getAllOrders();
+            } else if (authUser) {
+              orders = await ordersService.getUserOrders(authUser.uid);
             }
           }
+
           const active = orders.find(
             (o) => o.status !== 'completed' && o.status !== 'cancelled'
           );
@@ -592,50 +600,44 @@ export const useStore = create<AppState>()(
           });
 
           // Optimistically update orders in store with new order so admin/user sees it instantly
-          const orderId = result?.orderId;
-          const orderNumber = result?.orderNumber || 1001;
-          if (orderId) {
-            const newOrder: Order = {
-              id: orderId,
-              order_number: orderNumber,
-              customer_name: orderData.customer_name,
-              customer_phone: orderData.customer_phone,
-              address: orderData.address,
-              user_id: orderData.user_id,
-              type: orderData.type,
-              branch: orderData.branch,
-              total: clientComputedTotal,
-              status: 'new',
-              created_at: new Date().toISOString(),
-              items: orderData.items.map((item) => ({
-                id: 'item_' + Math.random().toString(36).substring(2, 7),
-                product_id: item.id,
-                name_ar: item.name_ar,
-                quantity: item.quantity,
-                unit_price: (item.price ?? 0) + (item.optionsPrice ?? 0),
-                selected_option_ids: item.selectedOptionIds,
-                special_instructions: item.specialInstructions,
-              })),
-            };
+          const newOrder: Order = {
+            id: result.orderId,
+            order_number: result.orderNumber,
+            customer_name: orderData.customer_name,
+            customer_phone: orderData.customer_phone,
+            address: orderData.address,
+            user_id: orderData.user_id,
+            type: orderData.type,
+            branch: orderData.branch,
+            total: clientComputedTotal,
+            status: 'new',
+            created_at: new Date().toISOString(),
+            items: orderData.items.map((item) => ({
+              id: 'item_' + Math.random().toString(36).substring(2, 7),
+              product_id: item.id,
+              name_ar: item.name_ar,
+              quantity: item.quantity,
+              unit_price: (item.price ?? 0) + (item.optionsPrice ?? 0),
+              selected_option_ids: item.selectedOptionIds,
+              special_instructions: item.specialInstructions,
+            })),
+          };
 
-            set((state) => {
-              const updated = [newOrder, ...state.orders.filter((o) => o.id !== orderId)];
-              saveOrdersToCache(updated);
-              return { orders: updated, loading: false };
-            });
+          set((state) => {
+            const updated = [newOrder, ...state.orders.filter((o) => o.id !== result.orderId)];
+            saveOrdersToCache(updated);
+            return { orders: updated, loading: false };
+          });
 
-            broadcastSyncEvent({
-              type: 'ORDER_CREATED',
-              order: newOrder,
-            });
-            broadcastSyncEvent({
-              type: 'ORDER_EVENT_NOTIFICATION',
-              orderId,
-              action: 'created',
-            });
-          } else {
-            set({ loading: false });
-          }
+          broadcastSyncEvent({
+            type: 'ORDER_EVENT_NOTIFICATION',
+            orderId: result.orderId,
+            action: 'created',
+          });
+          broadcastSyncEvent({
+            type: 'ORDER_CREATED',
+            order: newOrder,
+          });
 
           return result;
         } catch (err: any) {
