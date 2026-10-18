@@ -197,7 +197,7 @@ interface AppState {
   clearCart: () => void;
 
   // Order Actions
-  submitOrder: (order: Omit<Order, 'id' | 'created_at' | 'status' | 'items'> & { items: CartItem[]; idempotency_key?: string }) => Promise<{ orderId: string; orderNumber: number } | null>;
+  submitOrder: (order: Omit<Order, 'id' | 'created_at' | 'status' | 'items'> & { items: CartItem[]; idempotency_key?: string; subtotal?: number; delivery_fee?: number }) => Promise<{ orderId: string; orderNumber: number } | null>;
   reorderFromHistory: (items: OrderItem[]) => { added: number; skipped: string[] };
 
   // Admin Actions
@@ -718,6 +718,16 @@ export const useStore = create<AppState>()(
             return null;
           }
 
+          // Authoritatively resolve subtotal and guarantee delivery_fee = 0, total = subtotal
+          const computedSubtotal = orderData.items.reduce((sum, item) => {
+            const itemPrice = (Number(item.price) || 0) + (Number(item.optionsPrice) || 0);
+            return sum + itemPrice * (Number(item.quantity) || 1);
+          }, 0);
+          const orderSubtotal = typeof orderData.subtotal === 'number' && orderData.subtotal > 0
+            ? orderData.subtotal
+            : (computedSubtotal > 0 ? computedSubtotal : (orderData.total || 0));
+          const orderTotal = orderSubtotal;
+
           const result = await ordersService.createOrder({
             customer_name: orderData.customer_name,
             customer_phone: orderData.customer_phone,
@@ -725,8 +735,9 @@ export const useStore = create<AppState>()(
             user_id: orderData.user_id,
             type: orderData.type,
             branch: orderData.branch,
-            total: orderData.total || 0,
-            subtotal: orderData.total || 0,
+            subtotal: orderSubtotal,
+            delivery_fee: 0,
+            total: orderTotal,
             status: 'new',
             idempotency_key: idempotencyKey,
             raw_items: orderData.items,
@@ -756,9 +767,9 @@ export const useStore = create<AppState>()(
             user_id: orderData.user_id,
             type: orderData.type,
             branch: orderData.branch,
-            subtotal: orderData.total || 0,
+            subtotal: orderSubtotal,
             delivery_fee: 0,
-            total: orderData.total || 0,
+            total: orderTotal,
             status: 'new',
             created_at: new Date().toISOString(),
             items: orderData.items.map((item) => ({

@@ -213,9 +213,13 @@ export async function validateAndRecalculateOrder(
     // 4. Determine verified delivery fee
     let verifiedDeliveryFee = 0;
     if (payload.type === 'delivery') {
-      const branchFee = settings?.branches?.[payload.branch]?.delivery_fee;
-      const globalFee = settings?.delivery_fee;
-      verifiedDeliveryFee = typeof branchFee === 'number' ? branchFee : (typeof globalFee === 'number' ? globalFee : 0);
+      if (typeof payload.delivery_fee === 'number') {
+        verifiedDeliveryFee = payload.delivery_fee;
+      } else {
+        const branchFee = settings?.branches?.[payload.branch]?.delivery_fee;
+        const globalFee = settings?.delivery_fee;
+        verifiedDeliveryFee = typeof branchFee === 'number' ? branchFee : (typeof globalFee === 'number' ? globalFee : 0);
+      }
     }
 
     const calculatedTotal = calculatedSubtotal + verifiedDeliveryFee;

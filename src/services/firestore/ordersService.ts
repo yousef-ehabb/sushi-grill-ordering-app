@@ -208,8 +208,8 @@ export const ordersService = {
     const cleanPhone = orderData.customer_phone?.trim() || '';
     const cleanBranch = (orderData.branch?.trim() === 'فرع الكرفان') ? 'فرع الكرفان' : 'فرع الاستاد';
     const subtotal = Number(orderData.subtotal) || Number(orderData.total) || 1;
-    const deliveryFee = Number(orderData.delivery_fee) || 0;
-    const total = Number(orderData.total) || (subtotal + deliveryFee);
+    const deliveryFee = 0;
+    const total = subtotal;
 
     const existingRecentOrder = stored.find((o: any) => {
       if (rawKey && o.idempotency_key === rawKey) return true;
@@ -489,6 +489,9 @@ export const ordersService = {
             type: orderData.type,
             branch: orderData.branch,
             items: serverItems,
+            subtotal,
+            delivery_fee: 0,
+            total,
             idempotency_key: orderData.idempotency_key,
           }),
           signal: controller.signal,
@@ -512,7 +515,9 @@ export const ordersService = {
             user_id: orderData.user_id,
             type: orderData.type,
             branch: orderData.branch,
-            total: orderData.total,
+            subtotal: orderData.subtotal ?? orderData.total,
+            delivery_fee: 0,
+            total: orderData.subtotal ?? orderData.total,
             status: 'new',
             created_at: new Date().toISOString(),
             items: orderData.items,
@@ -537,7 +542,9 @@ export const ordersService = {
         user_id: orderData.user_id,
         type: orderData.type,
         branch: orderData.branch,
-        total: orderData.total,
+        subtotal: orderData.subtotal ?? orderData.total,
+        delivery_fee: 0,
+        total: orderData.subtotal ?? orderData.total,
         status: 'new',
         created_at: new Date().toISOString(),
         items: orderData.items,

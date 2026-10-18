@@ -254,7 +254,9 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
         type: orderType || 'pickup',
         branch: selectedBranch,
         items: cartSnapshot,
-        total,
+        subtotal,
+        delivery_fee: 0,
+        total: subtotal,
         idempotency_key: activeKey,
       });
 
@@ -269,8 +271,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
           branch: selectedBranch,
           items: cartSnapshot,
           subtotal,
-          deliveryFee,
-          total,
+          deliveryFee: 0,
+          total: subtotal,
           createdAt: new Date().toISOString(),
         };
 

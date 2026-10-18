@@ -372,9 +372,13 @@ async function localProcessOrderCreation(
 
   let deliveryFee = 0;
   if (payload.type === 'delivery') {
-    const branchFee = settings?.branches?.[branch]?.delivery_fee;
-    const globalFee = settings?.delivery_fee;
-    deliveryFee = typeof branchFee === 'number' ? branchFee : (typeof globalFee === 'number' ? globalFee : 0);
+    if (typeof payload.delivery_fee === 'number') {
+      deliveryFee = payload.delivery_fee;
+    } else {
+      const branchFee = settings?.branches?.[branch]?.delivery_fee;
+      const globalFee = settings?.delivery_fee;
+      deliveryFee = typeof branchFee === 'number' ? branchFee : (typeof globalFee === 'number' ? globalFee : 0);
+    }
   }
 
   const finalTotal = calculatedSubtotal + deliveryFee;
