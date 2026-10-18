@@ -756,6 +756,8 @@ export const useStore = create<AppState>()(
             user_id: orderData.user_id,
             type: orderData.type,
             branch: orderData.branch,
+            subtotal: orderData.total || 0,
+            delivery_fee: 0,
             total: orderData.total || 0,
             status: 'new',
             created_at: new Date().toISOString(),
@@ -1208,6 +1210,7 @@ export const useStore = create<AppState>()(
 
         try {
           const realId = await optionsService.createOption(groupId, {
+            group_id: groupId,
             name_ar: data.name_ar,
             price_delta: data.price_delta,
             is_active: true,

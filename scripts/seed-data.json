@@ -8,7 +8,7 @@
       "currency": "ج.م",
       "is_open": true,
       "closed_message": "المطعم مغلق حالياً، نسعد باستقبال طلباتكم في أوقات العمل القادمة",
-      "delivery_fee": 25,
+      "delivery_fee": 0,
       "min_order_amount": 80,
       "estimated_delivery_time": "30-45 دقيقة",
       "allow_delivery": true,

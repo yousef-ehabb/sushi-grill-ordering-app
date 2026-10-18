@@ -374,7 +374,7 @@ async function localProcessOrderCreation(
   if (payload.type === 'delivery') {
     const branchFee = settings?.branches?.[branch]?.delivery_fee;
     const globalFee = settings?.delivery_fee;
-    deliveryFee = typeof branchFee === 'number' ? branchFee : (typeof globalFee === 'number' ? globalFee : 25);
+    deliveryFee = typeof branchFee === 'number' ? branchFee : (typeof globalFee === 'number' ? globalFee : 0);
   }
 
   const finalTotal = calculatedSubtotal + deliveryFee;

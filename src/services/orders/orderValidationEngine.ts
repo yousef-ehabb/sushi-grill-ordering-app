@@ -50,7 +50,7 @@ export async function validateAndRecalculateOrder(
       const itemUnitPrice = (Number(item.price) || 0) + (Number(item.optionsPrice) || 0);
       return sum + itemUnitPrice * (Number(item.quantity) || 1);
     }, 0);
-    const deliveryFee = payload.type === 'delivery' ? 25 : 0;
+    const deliveryFee = 0;
     const verifiedItems: OrderItem[] = payload.items.map((item) => ({
       id: 'item_' + Math.random().toString(36).substring(2, 7),
       product_id: item.id,
@@ -215,7 +215,7 @@ export async function validateAndRecalculateOrder(
     if (payload.type === 'delivery') {
       const branchFee = settings?.branches?.[payload.branch]?.delivery_fee;
       const globalFee = settings?.delivery_fee;
-      verifiedDeliveryFee = typeof branchFee === 'number' ? branchFee : (typeof globalFee === 'number' ? globalFee : 25);
+      verifiedDeliveryFee = typeof branchFee === 'number' ? branchFee : (typeof globalFee === 'number' ? globalFee : 0);
     }
 
     const calculatedTotal = calculatedSubtotal + verifiedDeliveryFee;

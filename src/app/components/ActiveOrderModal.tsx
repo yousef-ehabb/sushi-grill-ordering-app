@@ -737,10 +737,16 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
                                                 <span>{order.subtotal} ج.م</span>
                                             </div>
                                         )}
-                                        {typeof order.delivery_fee === 'number' && order.delivery_fee > 0 && (
-                                            <div className="flex justify-between text-slate-500 font-medium">
+                                        {(order.type === 'delivery' || (typeof order.delivery_fee === 'number' && order.delivery_fee > 0)) && (
+                                            <div className="flex justify-between items-center text-slate-500 font-medium">
                                                 <span>رسوم التوصيل</span>
-                                                <span>{order.delivery_fee} ج.م</span>
+                                                {typeof order.delivery_fee === 'number' && order.delivery_fee > 0 ? (
+                                                    <span>{order.delivery_fee} ج.م</span>
+                                                ) : (
+                                                    <span className="text-[11px] font-bold text-blue-700 bg-blue-50 border border-blue-200/60 px-2 py-0.5 rounded-md">
+                                                        تُحدد حسب العنوان
+                                                    </span>
+                                                )}
                                             </div>
                                         )}
                                         <div className="flex items-center justify-between pt-2 border-t border-slate-200">
@@ -749,6 +755,11 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
                                                 {order.total} <span className="text-xs font-bold text-slate-400">ج.م</span>
                                             </span>
                                         </div>
+                                        {order.type === 'delivery' && (
+                                            <p className="text-[10px] text-slate-400 text-center font-medium">
+                                                * السعر لا يشمل خدمة التوصيل (تُحدد حسب المنطقة عند الاستلام)
+                                            </p>
+                                        )}
                                     </div>
 
                                     {/* Cancel Button (only for new orders) */}

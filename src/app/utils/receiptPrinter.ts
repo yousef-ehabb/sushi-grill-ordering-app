@@ -107,8 +107,9 @@ export function generateReceiptHtml(order: Order, optionsMap?: Map<string, strin
     `;
   }).join('');
 
+  const isDelivery = order.type === 'delivery';
   const deliveryFee = order.delivery_fee && order.delivery_fee > 0 ? order.delivery_fee : 0;
-  const subtotal = order.subtotal || (order.total - deliveryFee);
+  const subtotal = order.subtotal || (deliveryFee > 0 ? order.total - deliveryFee : order.total);
 
   return `<!DOCTYPE html>
 <html dir="rtl" lang="ar">
@@ -374,21 +375,33 @@ export function generateReceiptHtml(order: Order, optionsMap?: Map<string, strin
 
   <!-- Totals -->
   <div class="dashed-divider"></div>
-  ${deliveryFee > 0 ? `
+  ${isDelivery ? `
     <div class="totals-row">
-      <span>قيمة الأصناف:</span>
+      <span>قيمة الأصناف (الأكل):</span>
       <span>${subtotal} ج.م</span>
     </div>
-    <div class="totals-row">
+    <div class="totals-row" style="margin: 4px 0;">
       <span>خدمة التوصيل:</span>
-      <span>${deliveryFee} ج.م</span>
+      <span style="font-family: monospace; font-weight: bold; letter-spacing: 1px;">
+        ${deliveryFee > 0 ? `${deliveryFee} ج.م` : '____________ ج.م'}
+      </span>
     </div>
-  ` : ''}
-
-  <div class="grand-total-box">
-    <span class="grand-total-label">المجموع المطلوب:</span>
-    <span class="grand-total-val">${order.total} ج.م</span>
-  </div>
+    <div class="grand-total-box" style="margin-top: 6px;">
+      <span class="grand-total-label">إجمالي الأصناف:</span>
+      <span class="grand-total-val" style="font-size: 16px;">
+        ${subtotal} ج.م <span style="font-size: 11px; font-weight: 700;">(+ التوصيل)</span>
+      </span>
+    </div>
+    <div class="totals-row" style="margin-top: 8px; padding-top: 6px; border-top: 1px dashed #000; font-size: 12.5px; font-weight: 900;">
+      <span>الإجمالي شامل التوصيل:</span>
+      <span style="font-family: monospace; font-size: 12.5px; letter-spacing: 1px;">____________ ج.م</span>
+    </div>
+  ` : `
+    <div class="grand-total-box">
+      <span class="grand-total-label">المجموع المطلوب:</span>
+      <span class="grand-total-val">${order.total} ج.م</span>
+    </div>
+  `}
 
   <!-- Footer Note -->
   <div class="footer-note">

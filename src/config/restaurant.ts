@@ -88,7 +88,7 @@ export const restaurantConfig: RestaurantConfig = {
   },
   ordering: {
     currencySymbol: 'ج.م',
-    defaultDeliveryFee: 25,
+    defaultDeliveryFee: 0,
     minOrderAmount: 80,
     estimatedDeliveryTime: '30-45 دقيقة',
     allowDelivery: true,

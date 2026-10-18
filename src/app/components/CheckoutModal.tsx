@@ -188,10 +188,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
   }, 0);
 
   const deliveryFee = orderType === 'delivery'
-    ? (restaurantConfig.ordering.defaultDeliveryFee ?? 25)
+    ? (restaurantConfig.ordering.defaultDeliveryFee ?? 0)
     : 0;
 
-  const total = subtotal + deliveryFee;
+  const total = subtotal;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -710,12 +710,38 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
                     </div>
                   )}
 
-                  <div className="flex justify-between items-center mb-3 sm:mb-4 text-xs sm:text-sm">
-                    <span className="text-slate-500 font-medium">الإجمالي المطلوب</span>
-                    <span className="text-xl sm:text-2xl font-black text-slate-900">
-                      {total} <span className="text-xs sm:text-base font-bold text-slate-400">ج.م</span>
-                    </span>
-                  </div>
+                  {orderType === 'delivery' ? (
+                    <div className="space-y-2 mb-3 sm:mb-4 bg-slate-50/80 p-3 rounded-2xl border border-slate-100">
+                      <div className="flex justify-between items-center text-xs sm:text-sm text-slate-500 font-medium">
+                        <span>قيمة الأصناف (المجموع الفرعي)</span>
+                        <span className="font-bold text-slate-700 font-mono">{subtotal} ج.م</span>
+                      </div>
+                      <div className="flex justify-between items-center text-xs sm:text-sm text-slate-500 font-medium">
+                        <span>خدمة التوصيل</span>
+                        <span className="text-[11px] sm:text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200/60 px-2 py-0.5 rounded-md">
+                          تُحدد حسب العنوان
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center pt-2 border-t border-slate-200/80 text-xs sm:text-sm">
+                        <div className="flex flex-col">
+                          <span className="text-slate-900 font-black">الإجمالي المطلوب</span>
+                          <span className="text-[10px] text-slate-400 font-medium">
+                            * السعر لا يشمل خدمة التوصيل (تُحدد حسب المنطقة)
+                          </span>
+                        </div>
+                        <span className="text-xl sm:text-2xl font-black text-slate-900 font-mono">
+                          {total} <span className="text-xs sm:text-base font-bold text-slate-400">ج.م</span>
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex justify-between items-center mb-3 sm:mb-4 text-xs sm:text-sm">
+                      <span className="text-slate-500 font-medium">الإجمالي المطلوب</span>
+                      <span className="text-xl sm:text-2xl font-black text-slate-900">
+                        {total} <span className="text-xs sm:text-base font-bold text-slate-400">ج.م</span>
+                      </span>
+                    </div>
+                  )}
                   <button
                     form="checkout-form"
                     type="submit"
@@ -890,10 +916,16 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
                       <span>المجموع الفرعي</span>
                       <span className="font-mono">{receiptData?.subtotal || 0} ج.م</span>
                     </div>
-                    {typeof receiptData?.deliveryFee === 'number' && receiptData.deliveryFee > 0 && (
-                      <div className="flex justify-between text-slate-500 font-medium">
-                        <span>رسوم التوصيل</span>
-                        <span className="font-mono">{receiptData.deliveryFee} ج.م</span>
+                    {receiptData?.type === 'delivery' && (
+                      <div className="flex justify-between items-center text-slate-500 font-medium">
+                        <span>خدمة التوصيل</span>
+                        {typeof receiptData?.deliveryFee === 'number' && receiptData.deliveryFee > 0 ? (
+                          <span className="font-mono">{receiptData.deliveryFee} ج.م</span>
+                        ) : (
+                          <span className="text-[11px] font-bold text-blue-700 bg-blue-50 border border-blue-200/60 px-2 py-0.5 rounded-md">
+                            تُحدد حسب العنوان
+                          </span>
+                        )}
                       </div>
                     )}
                     <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-sm font-black">
@@ -902,6 +934,11 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
                         {receiptData?.total || 0} ج.م
                       </span>
                     </div>
+                    {receiptData?.type === 'delivery' && (
+                      <p className="text-[10px] text-slate-400 text-center font-medium">
+                        * السعر لا يشمل خدمة التوصيل (تُحدد حسب المنطقة عند الاستلام)
+                      </p>
+                    )}
                     <p className="text-[11px] text-slate-400 text-center font-medium pt-0.5">
                       طريقة الدفع: نقداً عند الاستلام (كاش)
                     </p>

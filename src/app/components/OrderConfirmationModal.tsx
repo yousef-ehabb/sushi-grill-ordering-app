@@ -300,10 +300,16 @@ export const OrderConfirmationModal: React.FC<OrderConfirmationModalProps> = ({
                 <span className="font-mono">{receiptData.subtotal} ج.م</span>
               </div>
 
-              {receiptData.deliveryFee > 0 && (
-                <div className="flex justify-between text-slate-500 font-semibold">
+              {receiptData.type === 'delivery' && (
+                <div className="flex justify-between items-center text-slate-500 font-semibold">
                   <span>خدمة التوصيل</span>
-                  <span className="font-mono">{receiptData.deliveryFee} ج.م</span>
+                  {receiptData.deliveryFee > 0 ? (
+                    <span className="font-mono">{receiptData.deliveryFee} ج.م</span>
+                  ) : (
+                    <span className="text-[11px] font-bold text-blue-700 bg-blue-50 border border-blue-200/60 px-2 py-0.5 rounded-md">
+                      تُحدد حسب العنوان
+                    </span>
+                  )}
                 </div>
               )}
 
@@ -313,6 +319,12 @@ export const OrderConfirmationModal: React.FC<OrderConfirmationModalProps> = ({
                   {receiptData.total} ج.م
                 </span>
               </div>
+
+              {receiptData.type === 'delivery' && (
+                <p className="text-[10px] text-slate-400 text-center font-medium">
+                  * السعر لا يشمل خدمة التوصيل (تُحدد حسب المنطقة عند الاستلام)
+                </p>
+              )}
 
               <div className="text-[11px] text-emerald-700 bg-emerald-50 rounded-lg p-2 text-center font-bold border border-emerald-200/60">
                 💵 طريقة الدفع: نقداً عند الاستلام (كاش)

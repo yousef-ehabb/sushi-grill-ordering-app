@@ -214,7 +214,7 @@ export const optionsService = {
   /**
    * Create a new option inside a group
    */
-  async createOption(groupId: string, data: Omit<ProductOption, 'id'>): Promise<string> {
+  async createOption(groupId: string, data: Omit<ProductOption, 'id' | 'group_id'> & { group_id?: string }): Promise<string> {
     if (!isFirebaseConfigured() || !db) throw new Error('Firebase not configured');
     const docRef = await addDoc(collection(db, OPTIONS_COLLECTION), {
       ...data,

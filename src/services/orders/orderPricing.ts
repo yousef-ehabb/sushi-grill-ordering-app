@@ -4,7 +4,7 @@ export type AllowedBranch = (typeof ALLOWED_BRANCHES)[number];
 export const MAX_LINE_ITEMS = 25;
 export const MAX_QUANTITY = 20;
 export const MAX_SPECIAL_INSTRUCTIONS = 300;
-export const DEFAULT_DELIVERY_FEE = 25;
+export const DEFAULT_DELIVERY_FEE = 0;
 
 export interface CatalogProduct {
   id: string;
