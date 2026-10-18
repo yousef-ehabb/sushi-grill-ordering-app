@@ -114,10 +114,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
 
   // Options & sauces availability check in selected branch & globally
   const unavailableCartOptions = useMemo(() => {
-    const allOptions = [
-      ...(allOptionGroups || []).flatMap((g) => g.options || []),
-      ...Object.values(useStore.getState().optionGroupsByProductId || {}).flatMap((groups) => groups.flatMap((g) => g.options || [])),
-    ];
+    // Live allOptionGroups takes strict priority so .find() always hits the latest Firestore-synced branch_availability
+    const liveOptions = (allOptionGroups || []).flatMap((g) => g.options || []);
+    const productOptions = Object.values(useStore.getState().optionGroupsByProductId || {}).flatMap((groups) => groups.flatMap((g) => g.options || []));
+    const allOptions = [...liveOptions, ...productOptions];
     const foundUnavailable: { itemName: string; optionName: string }[] = [];
 
     for (const item of cart) {

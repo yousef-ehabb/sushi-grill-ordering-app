@@ -488,6 +488,10 @@ const CustomerLayout: React.FC = () => {
           setIsActiveOrderOpen(false);
           setGuestTrackingParams(null);
         }}
+        onSwitchOrder={(newOrderId, newPhone) => {
+          setGuestTrackingParams({ orderId: newOrderId, phone: newPhone || '' });
+          useStore.setState({ activeOrder: { id: newOrderId, status: 'new' } });
+        }}
         onBrowseMenu={() => document.getElementById('menu')?.scrollIntoView({ behavior: 'smooth' })}
       />
     </div>

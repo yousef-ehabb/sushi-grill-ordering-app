@@ -50,17 +50,20 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ produc
         return optionGroupsByProductId[product.id] || [];
     }, [allOptionGroups, optionGroupsByProductId, product.id]);
 
-    // Automatically clean up any selected options that become disabled in real time
+    // Automatically clean up any selected options that become completely disabled (globally or across all branches)
     useEffect(() => {
         if (selectedOptions.length === 0) return;
         const activeOptionIds = new Set(
-            groups.flatMap(g => (g.options || []).filter(o => isOptionAvailableInBranch(o, selectedBranch)).map(o => o.id))
+            groups.flatMap(g => (g.options || []).filter(o => {
+                if (o.is_active === false || (o as any).available === false) return false;
+                return isOptionAvailableInBranch(o, 'فرع الاستاد') || isOptionAvailableInBranch(o, 'فرع الكرفان');
+            }).map(o => o.id))
         );
         setSelectedOptions(prev => {
             const valid = prev.filter(id => activeOptionIds.has(id));
             return valid.length === prev.length ? prev : valid;
         });
-    }, [groups, selectedBranch]);
+    }, [groups]);
 
     // Real-time alert if item becomes unavailable while modal is open
     useEffect(() => {
@@ -104,9 +107,12 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ produc
     const handleAdd = () => {
         if (isDisabled) return;
 
-        // Filter out any options that might have become inactive or unavailable in selectedBranch
+        // Filter out any options that might have become inactive globally or across all branches
         const activeOptionIds = new Set(
-            groups.flatMap(g => (g.options || []).filter(o => isOptionAvailableInBranch(o, selectedBranch)).map(o => o.id))
+            groups.flatMap(g => (g.options || []).filter(o => {
+                if (o.is_active === false || (o as any).available === false) return false;
+                return isOptionAvailableInBranch(o, 'فرع الاستاد') || isOptionAvailableInBranch(o, 'فرع الكرفان');
+            }).map(o => o.id))
         );
         const validSelectedOptions = selectedOptions.filter(id => activeOptionIds.has(id));
 

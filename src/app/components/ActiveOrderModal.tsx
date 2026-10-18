@@ -6,7 +6,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { db, isFirebaseConfigured } from '../../lib/firebase';
 import { useAuthStore } from '../store/useAuthStore';
 import { ordersService } from '../../services/firestore';
-import type { OrderItem, OrderStatus } from '../store/useStore';
+import { useStore, type OrderItem, type OrderStatus } from '../store/useStore';
 import { resolveAllOptionNames } from '../utils/optionNames';
 import { getDisplayOrderId, isCancellable } from '../utils/orderUtils';
 import { broadcastSyncEvent, subscribeToSyncEvents } from '../utils/realtimeSync';
@@ -77,11 +77,14 @@ interface Props {
     isOpen: boolean;
     onClose: () => void;
     onBrowseMenu?: () => void;
+    onSwitchOrder?: (orderId: string, phone?: string) => void;
 }
 
-export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen, onClose, onBrowseMenu }) => {
+export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen, onClose, onBrowseMenu, onSwitchOrder }) => {
     const { user } = useAuthStore();
+    const { activeOrder } = useStore();
     const [order, setOrder] = useState<ActiveOrderData | null>(null);
+    const [isManualSearchMode, setIsManualSearchMode] = useState(false);
     const [optionNames, setOptionNames] = useState<Map<string, string>>(new Map());
     const [loading, setLoading] = useState(false);
     const [fetchError, setFetchError] = useState<string | null>(null);
@@ -95,7 +98,12 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
     const [lastSavedOrder, setLastSavedOrder] = useState<LastSavedOrder | null>(null);
 
     useEffect(() => {
-        if (!isOpen) return;
+        if (!isOpen) {
+            setIsManualSearchMode(false);
+            return;
+        }
+
+        if (isManualSearchMode) return;
 
         setFetchError(null);
         if (orderId) setManualOrderId(orderId);
@@ -140,13 +148,13 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
             setOrder(null);
             setLoading(false);
         }
-    }, [isOpen, orderId, guestPhone, user]);
+    }, [isOpen, orderId, guestPhone, user, isManualSearchMode]);
 
     // ── Live Real-Time Subscriptions (Firestore onSnapshot + Server Polling + BroadcastChannel fallback) ──
     useEffect(() => {
-        if (!isOpen) return;
+        if (!isOpen || isManualSearchMode) return;
 
-        const targetId = order?.id || orderId;
+        const targetId = isManualSearchMode ? null : (order?.id || orderId);
         if (!targetId) return;
 
         // Normalize order ID for matching: strip '#', trim whitespace, compare as string
@@ -324,7 +332,7 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
             clearInterval(pollTimer);
             document.removeEventListener('visibilitychange', handleVisibilityChange);
         };
-    }, [isOpen, order?.id, order?.order_number, order?.status, orderId]);
+    }, [isOpen, order?.id, order?.order_number, order?.status, orderId, isManualSearchMode]);
 
     const fetchAuthenticatedOrder = async (id: string) => {
         if (!id || !user || !isFirebaseConfigured() || !db) {
@@ -377,6 +385,7 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
                 created_at: orderData.created_at,
                 items,
             });
+            setIsManualSearchMode(false);
         } catch {
             setFetchError('تعذر تحميل بيانات الطلب');
             setOrder(null);
@@ -424,12 +433,30 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
                 items,
             });
 
+            setIsManualSearchMode(false);
+
+            // Save to localStorage for convenience
+            try {
+                const savedOrder: LastSavedOrder = {
+                    orderId: guestOrder.id,
+                    orderNumber: (guestOrder as any).order_number || undefined,
+                    phone: phone.trim(),
+                    timestamp: Date.now(),
+                };
+                localStorage.setItem('pochinki_last_order', JSON.stringify(savedOrder));
+                setLastSavedOrder(savedOrder);
+            } catch {
+                // ignore
+            }
+
             useStore.setState({
                 activeOrder: {
                     id: guestOrder.id,
                     status: guestOrder.status,
                 },
             });
+
+            onSwitchOrder?.(guestOrder.id, phone.trim());
         } catch {
             setFetchError('حدث خطأ أثناء الاستعلام عن الطلب. يرجى المحاولة مرة أخرى.');
             setOrder(null);
@@ -471,7 +498,8 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
 
     const steps = order ? getSteps(order.type) : [];
     const activeStepIndex = order ? resolveStepIndex(steps, order.status, order.type) : -1;
-    const hasOrder = !!order;
+    const hasOrder = Boolean(order) && !isManualSearchMode;
+    const canReturnToCurrent = isManualSearchMode && Boolean(orderId || activeOrder?.id || lastSavedOrder);
 
     return (
         <AnimatePresence>
@@ -528,8 +556,11 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
                                 {hasOrder && (
                                     <button
                                         onClick={() => {
+                                            setIsManualSearchMode(true);
                                             setOrder(null);
                                             setFetchError(null);
+                                            setManualOrderId('');
+                                            setManualPhone('');
                                         }}
                                         className="p-1.5 text-xs text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors flex items-center gap-1 font-bold"
                                         title="بحث عن طلب آخر"
@@ -842,6 +873,22 @@ export const ActiveOrderModal: React.FC<Props> = ({ orderId, guestPhone, isOpen,
                                             )}
                                         </button>
                                     </form>
+
+                                    {canReturnToCurrent && (
+                                        <div className="pt-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setIsManualSearchMode(false);
+                                                    setFetchError(null);
+                                                }}
+                                                className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 border border-slate-200"
+                                            >
+                                                <span>العودة للطلب الحالي</span>
+                                                <ArrowLeft className="w-3.5 h-3.5" />
+                                            </button>
+                                        </div>
+                                    )}
 
                                     <div className="pt-3 border-t border-slate-100 text-center">
                                         <button
